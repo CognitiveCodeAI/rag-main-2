@@ -1,0 +1,160 @@
+{
+  "description": "Phase-2 adversarial questions for 2404.08865v1.pdf",
+  "pdf_path": "tests/docs/2404.08865v1.pdf",
+  "questions": [
+    {
+      "id": "p2q1",
+      "question": "Define the paper’s key-value retrieval evaluation and explain why it was chosen.",
+      "expected_evidence": [
+        {"node_type": "chunk", "section_hint": "Methodology"},
+        {"node_type": "chunk", "key_phrases": ["needle-in-a-haystack"]}
+      ],
+      "required_sections": ["Methodology"]
+    },
+    {
+      "id": "p2q2",
+      "question": "What is the paper’s reported RAG accuracy improvement?",
+      "expected_abstain": true
+    },
+    {
+      "id": "p2q3",
+      "question": "Which benchmark dataset (e.g., SQuAD, MMLU) was used for evaluation?",
+      "expected_abstain": true
+    },
+    {
+      "id": "p2q4",
+      "question": "What is the dataset used in this study?",
+      "expected_evidence": [
+        {"node_type": "chunk", "key_phrases": ["Paul Graham"]},
+        {"node_type": "table", "label": "Table 2"}
+      ],
+      "expected_figures": ["Table 2"]
+    },
+    {
+      "id": "p2q5",
+      "question": "In the Conclusion, list the main takeaways (bullet points).",
+      "expected_evidence": [
+        {"node_type": "chunk", "section_hint": "Conclusion"}
+      ],
+      "required_sections": ["Conclusion"]
+    },
+    {
+      "id": "p2q6",
+      "question": "In Appendix C, what exact output format must the judge produce?",
+      "expected_evidence": [
+        {"node_type": "chunk", "key_phrases": ["Rating: [[", "Rating: [[X]]"]}
+      ],
+      "required_sections": ["Appendix C"]
+    },
+    {
+      "id": "p2q7",
+      "question": "In Methodology, how are needle positions sampled (distribution + rationale)?",
+      "expected_evidence": [
+        {"node_type": "chunk", "section_hint": "Methodology"},
+        {"node_type": "chunk", "key_phrases": ["sigmoid", "linear"]}
+      ],
+      "required_sections": ["Methodology"]
+    },
+    {
+      "id": "p2q8",
+      "question": "Using Table 4, summarize what scores 5, 3, and 1 mean.",
+      "expected_evidence": [
+        {"node_type": "table", "label": "Table 4"}
+      ],
+      "expected_figures": ["Table 4"]
+    },
+    {
+      "id": "p2q9",
+      "question": "What are the three test cases used, and also briefly define ‘lost in the middle’.",
+      "expected_evidence": [
+        {"node_type": "table", "label": "Table 2"},
+        {"node_type": "chunk", "key_phrases": ["lost in the middle"]}
+      ],
+      "expected_figures": ["Table 2"]
+    },
+    {
+      "id": "p2q10",
+      "question": "Explain the San Francisco test, but do not mention tourism or famous landmarks.",
+      "expected_evidence": [
+        {"node_type": "chunk", "key_phrases": ["San Francisco", "training data"]}
+      ]
+    },
+    {
+      "id": "p2q11",
+      "question": "What does Figure 1 show, and how does it compare to GPT-4o?",
+      "expected_evidence": [
+        {"node_type": "figure", "label": "Figure 1"}
+      ],
+      "expected_figures": ["Figure 1"],
+      "forbidden_terms": ["gpt-4o"]
+    },
+    {
+      "id": "p2q12",
+      "question": "List the evaluated models and context lengths (from Table 1).",
+      "expected_evidence": [
+        {"node_type": "table", "label": "Table 1"}
+      ],
+      "expected_figures": ["Table 1"]
+    },
+    {
+      "id": "p2q13",
+      "question": "Which model performed best overall? Use Table 1 and Table 2.",
+      "expected_abstain": true
+    },
+    {
+      "id": "p2q14",
+      "question": "What does Figure 1 show about model performance?",
+      "expected_evidence": [
+        {"node_type": "figure", "label": "Figure 1"}
+      ],
+      "expected_figures": ["Figure 1"]
+    },
+    {
+      "id": "p2q15",
+      "question": "Where does the paper say ‘see Figure 1’ and what claim is it supporting?",
+      "expected_evidence": [
+        {"node_type": "chunk", "key_phrases": ["see Figure 1"]},
+        {"node_type": "figure", "label": "Figure 1"}
+      ],
+      "expected_figures": ["Figure 1"]
+    },
+    {
+      "id": "p2q16",
+      "question": "Describe the scoring method and the judge prompt used.",
+      "expected_evidence": [
+        {"node_type": "table", "label": "Table 4"},
+        {"node_type": "chunk", "section_hint": "Appendix C"}
+      ],
+      "expected_figures": ["Table 4"],
+      "required_sections": ["Appendix C"]
+    },
+    {
+      "id": "p2q17",
+      "question": "How is the haystack constructed, and what are the three factoid/question pairs?",
+      "expected_evidence": [
+        {"node_type": "chunk", "key_phrases": ["Paul Graham"]},
+        {"node_type": "table", "label": "Table 2"}
+      ],
+      "expected_figures": ["Table 2"]
+    },
+    {
+      "id": "p2q18",
+      "question": "What do the authors conclude about parameter count, and what evidence/test supports it?",
+      "expected_evidence": [
+        {"node_type": "chunk", "section_hint": "Conclusion"},
+        {"node_type": "chunk", "key_phrases": ["13B", "70B"]}
+      ],
+      "required_sections": ["Conclusion"]
+    },
+    {
+      "id": "p2q19",
+      "question": "What is the paper’s CO2 emissions estimate for these experiments?",
+      "expected_abstain": true
+    },
+    {
+      "id": "p2q20",
+      "question": "What is the paper’s recommended chunk size for RAG retrieval?",
+      "expected_abstain": true
+    }
+  ]
+}

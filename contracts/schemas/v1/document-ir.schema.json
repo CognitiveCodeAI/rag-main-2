@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://npr-rag.local/schemas/document-ir.v1.schema.json",
+  "title": "NPR DocumentIR Schema",
+  "description": "Canonical intermediate representation of a parsed document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "doc_ref",
+    "pages",
+    "sections",
+    "quality"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "doc_ref": {
+      "$ref": "https://npr-rag.local/schemas/document-ref.v1.schema.json"
+    },
+    "title": {
+      "type": ["string", "null"],
+      "default": null
+    },
+    "language": {
+      "type": ["string", "null"],
+      "description": "BCP-47 language code if detected",
+      "default": null
+    },
+    "pages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Page" },
+      "default": []
+    },
+    "sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Section" },
+      "default": []
+    },
+    "offset_map": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "description": "Opaque mapping enabling citations to raw artifact offsets",
+      "default": null
+    },
+    "quality": {
+      "$ref": "#/$defs/ParseQuality"
+    }
+  },
+
+  "$defs": {
+    "Page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_num", "blocks"],
+      "properties": {
+        "page_num": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "blocks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Block" },
+          "default": []
+        }
+      }
+    },
+
+    "Block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "start_offset", "end_offset"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["heading", "paragraph", "table", "figure", "code", "list"]
+        },
+        "text": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "level": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Heading level (1-6) if type is heading",
+          "default": null
+        },
+        "cells": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "description": "Table cells as 2D array if type is table",
+          "default": null
+        },
+        "code_lang": {
+          "type": ["string", "null"],
+          "description": "Programming language if type is code",
+          "default": null
+        },
+        "list_items": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "List items if type is list",
+          "default": null
+        },
+        "bbox": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "x0": { "type": "number" },
+            "y0": { "type": "number" },
+            "x1": { "type": "number" },
+            "y1": { "type": "number" }
+          },
+          "description": "Bounding box coordinates if available",
+          "default": null
+        },
+        "start_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_offset": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+
+    "Section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section_id", "heading", "level", "section_path"],
+      "properties": {
+        "section_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "heading": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6
+        },
+        "block_refs": {
+          "type": "array",
+          "items": { "type": "integer" },
+          "description": "Indices of blocks belonging to this section",
+          "default": []
+        },
+        "section_path": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Hierarchical path of section headings"
+        }
+      }
+    },
+
+    "ParseQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parse_confidence"],
+      "properties": {
+        "parse_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Overall confidence in parse quality (0-1)"
+        },
+        "ocr_used": {
+          "type": "boolean",
+          "default": false
+        },
+        "ocr_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "default": null
+        },
+        "table_confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "default": null
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://npr-rag.local/schemas/document-ref.v1.schema.json",
+  "title": "NPR DocumentRef Schema",
+  "description": "Reference to a document with version and provenance metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "doc_id",
+    "version_id",
+    "source_type",
+    "source_uri",
+    "checksum"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "doc_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]{1,256}$",
+      "description": "Stable document identifier"
+    },
+    "version_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]{1,256}$",
+      "description": "Monotonic version identifier"
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["pdf", "docx", "pptx", "html", "md", "txt", "csv", "xlsx", "wiki", "ticket", "email", "db", "image"]
+    },
+    "source_uri": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Original source URI or path"
+    },
+    "mime_type": {
+      "type": ["string", "null"],
+      "default": null
+    },
+    "checksum": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SHA-256 or similar hash of raw content"
+    },
+    "created_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "default": null
+    },
+    "modified_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "default": null
+    },
+    "owner": {
+      "type": ["string", "null"],
+      "default": null
+    },
+    "team": {
+      "type": ["string", "null"],
+      "default": null
+    },
+    "acl": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "principals": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      },
+      "default": { "labels": [], "principals": [] }
+    }
+  }
+}

@@ -1,0 +1,658 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://npr-rag.local/schemas/trace.v1.schema.json",
+    "title": "NPR Trace (Flight Recorder) Schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "trace_id",
+      "request_id",
+      "created_at",
+      "query_context",
+      "meta_snapshot",
+      "retrieval_plan",
+      "retrieval_execution",
+      "fusion",
+      "rerank",
+      "evidence_pack",
+      "answerability",
+      "generation",
+      "verification",
+      "final_response"
+    ],
+    "properties": {
+      "schema_version": { "type": "string", "const": "1.0" },
+      "trace_id": { "type": "string", "minLength": 1 },
+      "request_id": { "type": "string", "minLength": 1 },
+      "created_at": { "type": "string", "format": "date-time" },
+      "completed_at": { "type": ["string", "null"], "format": "date-time", "default": null },
+      "status": {
+        "type": "string",
+        "enum": ["SUCCESS", "CLARIFYING_QUESTION", "ABSTAINED", "FAILED"],
+        "default": "SUCCESS"
+      },
+  
+      "query_context": { "$ref": "#/$defs/QueryContext" },
+      "meta_snapshot": { "$ref": "#/$defs/MetaSnapshotRef" },
+  
+      "retrieval_plan": {
+        "description": "The exact RetrievalPlan object produced by the planner (must validate against the RetrievalPlan schema).",
+        "oneOf": [
+          { "$ref": "https://npr-rag.local/schemas/retrieval-plan.v1.schema.json" },
+          { "type": "object" }
+        ]
+      },
+  
+      "planner": { "$ref": "#/$defs/PlannerTrace" },
+      "retrieval_execution": { "$ref": "#/$defs/RetrievalExecutionTrace" },
+      "fusion": { "$ref": "#/$defs/FusionTrace" },
+      "rerank": { "$ref": "#/$defs/RerankTrace" },
+      "evidence_pack": { "$ref": "#/$defs/EvidencePackTrace" },
+      "answerability": { "$ref": "#/$defs/AnswerabilityTrace" },
+      "generation": { "$ref": "#/$defs/GenerationTrace" },
+      "verification": { "$ref": "#/$defs/VerificationTrace" },
+  
+      "corrective_loops": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/CorrectiveLoopTrace" },
+        "default": []
+      },
+  
+      "final_response": { "$ref": "#/$defs/FinalResponseTrace" },
+  
+      "metrics": { "$ref": "#/$defs/TraceMetrics" },
+      "errors": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/ErrorRecord" },
+        "default": []
+      }
+    },
+  
+    "$defs": {
+      "QueryContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["user_query", "normalized_query", "intent", "language", "constraints", "session"],
+        "properties": {
+          "user_query": { "type": "string", "minLength": 1 },
+          "normalized_query": { "type": "string", "minLength": 1 },
+          "intent": {
+            "type": "string",
+            "enum": ["QA", "SUMMARIZE", "COMPARE", "TROUBLESHOOT", "EXTRACT", "OTHER"],
+            "default": "QA"
+          },
+          "language": { "type": ["string", "null"], "description": "BCP-47 if known", "default": null },
+  
+          "constraints": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["time_range", "product", "component", "version", "environment", "latency_ms", "max_iterations"],
+            "properties": {
+              "time_range": { "$ref": "#/$defs/TimeRange" },
+              "product": { "type": ["string", "null"], "default": null },
+              "component": { "type": ["string", "null"], "default": null },
+              "version": { "type": ["string", "null"], "default": null },
+              "environment": { "type": ["string", "null"], "default": null },
+              "latency_ms": { "type": "integer", "minimum": 0, "default": 0 },
+              "max_iterations": { "type": "integer", "minimum": 0, "maximum": 10, "default": 2 }
+            }
+          },
+  
+          "session": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["conversation_id", "turn_id"],
+            "properties": {
+              "conversation_id": { "type": ["string", "null"], "default": null },
+              "turn_id": { "type": ["string", "null"], "default": null },
+              "conversation_summary": { "type": ["string", "null"], "default": null }
+            }
+          },
+  
+          "user_acl": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "default": null
+          },
+  
+          "input_flags": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "user_injection_suspected": { "type": "boolean", "default": false },
+              "identifier_typo_suspected": { "type": "boolean", "default": false },
+              "needs_clarification": { "type": "boolean", "default": false }
+            },
+            "default": {}
+          }
+        }
+      },
+  
+      "MetaSnapshotRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["meta_snapshot_id", "catalog_version", "graph_version", "indices_version"],
+        "properties": {
+          "meta_snapshot_id": { "type": "string", "minLength": 1 },
+          "catalog_version": { "type": "string", "minLength": 1 },
+          "graph_version": { "type": "string", "minLength": 1 },
+          "indices_version": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dense", "sparse", "neural_sparse", "late_interaction", "multimodal"],
+            "properties": {
+              "dense": { "type": ["string", "null"], "default": null },
+              "sparse": { "type": ["string", "null"], "default": null },
+              "neural_sparse": { "type": ["string", "null"], "default": null },
+              "late_interaction": { "type": ["string", "null"], "default": null },
+              "multimodal": { "type": ["string", "null"], "default": null }
+            }
+          }
+        }
+      },
+  
+      "PlannerTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "planner_type": { "type": "string", "enum": ["RULES", "LLM", "HYBRID"], "default": "HYBRID" },
+          "planner_model_id": { "type": ["string", "null"], "default": null },
+          "planner_temperature": { "type": ["number", "null"], "minimum": 0, "maximum": 2, "default": null },
+          "planner_prompt_id": { "type": ["string", "null"], "default": null },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "cost_units": { "type": ["number", "null"], "minimum": 0, "default": null },
+          "notes": { "type": ["string", "null"], "default": null }
+        },
+        "default": {}
+      },
+  
+      "RetrievalExecutionTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["steps"],
+        "properties": {
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/RetrievalStepRun" }
+          },
+          "total_candidates": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "cost_units": { "type": ["number", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "RetrievalStepRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "retriever", "query", "top_k", "filters", "status", "candidates"],
+        "properties": {
+          "step_id": { "type": "string", "minLength": 1 },
+          "retriever": {
+            "type": "string",
+            "enum": ["sparse", "dense", "neural_sparse", "late_interaction", "graph", "sql", "multimodal", "prf"]
+          },
+          "query": { "type": ["string", "null"], "default": null },
+          "top_k": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "filters": { "$ref": "#/$defs/FiltersEcho" },
+  
+          "status": { "type": "string", "enum": ["OK", "FAILED", "SKIPPED"] },
+          "error": { "$ref": "#/$defs/ErrorRecordNullable" },
+  
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "cost_units": { "type": ["number", "null"], "minimum": 0, "default": null },
+  
+          "candidates": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Candidate" },
+            "default": []
+          }
+        }
+      },
+  
+      "Candidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chunk_ref", "doc_ref", "scores", "retriever_sources"],
+        "properties": {
+          "chunk_ref": { "$ref": "#/$defs/ChunkRef" },
+          "doc_ref": { "$ref": "#/$defs/DocumentRefLite" },
+          "scores": { "$ref": "#/$defs/CandidateScores" },
+          "retriever_sources": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["step_id", "retriever", "score"],
+              "properties": {
+                "step_id": { "type": "string", "minLength": 1 },
+                "retriever": {
+                  "type": "string",
+                  "enum": ["sparse", "dense", "neural_sparse", "late_interaction", "graph", "sql", "multimodal", "prf"]
+                },
+                "score": { "type": "number" },
+                "debug": { "type": ["object", "null"], "additionalProperties": true, "default": null }
+              }
+            }
+          }
+        }
+      },
+  
+      "CandidateScores": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["final"],
+        "properties": {
+          "final": { "type": "number" },
+          "dense": { "type": ["number", "null"], "default": null },
+          "sparse": { "type": ["number", "null"], "default": null },
+          "neural_sparse": { "type": ["number", "null"], "default": null },
+          "late_interaction": { "type": ["number", "null"], "default": null },
+          "graph": { "type": ["number", "null"], "default": null },
+          "sql": { "type": ["number", "null"], "default": null },
+          "multimodal": { "type": ["number", "null"], "default": null }
+        }
+      },
+  
+      "FusionTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["method", "inputs", "output_ranked_candidate_ids"],
+        "properties": {
+          "method": { "type": "string", "enum": ["rrf", "weighted_sum", "ltr_fusion"] },
+          "inputs": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "List of step_ids contributing to fusion"
+          },
+          "output_ranked_candidate_ids": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Opaque IDs or chunk_ids representing the fused ranking order"
+          },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "RerankTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["method", "top_n", "input_count", "output_ranked_candidate_ids"],
+        "properties": {
+          "method": { "type": "string", "enum": ["none", "cross_encoder", "llm_reranker", "ltr"] },
+          "model_id": { "type": ["string", "null"], "default": null },
+          "top_n": { "type": "integer", "minimum": 1, "maximum": 500 },
+          "input_count": { "type": "integer", "minimum": 0 },
+          "output_ranked_candidate_ids": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "cost_units": { "type": ["number", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "EvidencePackTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pack_id", "format_id", "ordering_policy", "items", "coverage"],
+        "properties": {
+          "pack_id": { "type": "string", "minLength": 1 },
+          "format_id": { "type": "string", "minLength": 1 },
+          "ordering_policy": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "array",
+            "minItems": 0,
+            "items": { "$ref": "#/$defs/EvidenceItem" }
+          },
+          "coverage": { "$ref": "#/$defs/EvidenceCoverage" },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "EvidenceItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chunk_ref", "doc_ref", "source_uri", "spans", "scores", "trust"],
+        "properties": {
+          "chunk_ref": { "$ref": "#/$defs/ChunkRef" },
+          "doc_ref": { "$ref": "#/$defs/DocumentRefLite" },
+          "source_uri": { "type": "string", "minLength": 1 },
+          "spans": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/EvidenceSpan" }
+          },
+          "scores": { "$ref": "#/$defs/CandidateScores" },
+          "trust": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority_tier", "authority", "recency"],
+            "properties": {
+              "authority_tier": { "type": "string", "enum": ["TIER_1", "TIER_2", "TIER_3"] },
+              "authority": { "type": "number", "minimum": 0, "maximum": 1 },
+              "recency": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          },
+          "why_included": {
+            "type": ["object", "null"],
+            "additionalProperties": true,
+            "default": null
+          }
+        }
+      },
+  
+      "EvidenceSpan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start_offset", "end_offset", "text"],
+        "properties": {
+          "start_offset": { "type": "integer", "minimum": 0 },
+          "end_offset": { "type": "integer", "minimum": 0 },
+          "text": { "type": "string", "minLength": 1 }
+        }
+      },
+  
+      "EvidenceCoverage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entities_covered", "time_coverage", "constraints_satisfied", "missing_constraints"],
+        "properties": {
+          "entities_covered": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "time_coverage": { "type": "string", "enum": ["full", "partial", "none"] },
+          "constraints_satisfied": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "missing_constraints": { "type": "array", "items": { "type": "string" }, "default": [] }
+        }
+      },
+  
+      "AnswerabilityTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "confidence", "missing_constraints", "conflicts"],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": ["ANSWER", "ASK_CLARIFYING", "ABSTAIN_NO_EVIDENCE", "ANSWER_WITH_CONFLICTS"]
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "missing_constraints": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "conflicts": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/ConflictRecord" },
+            "default": []
+          },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "ConflictRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["topic", "sources"],
+        "properties": {
+          "topic": { "type": "string", "minLength": 1 },
+          "sources": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["doc_id", "version_id", "claim"],
+              "properties": {
+                "doc_id": { "type": "string", "minLength": 1 },
+                "version_id": { "type": "string", "minLength": 1 },
+                "claim": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      },
+  
+      "GenerationTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model_id", "output_schema_id", "draft"],
+        "properties": {
+          "model_id": { "type": "string", "minLength": 1 },
+          "temperature": { "type": ["number", "null"], "minimum": 0, "maximum": 2, "default": null },
+          "prompt_id": { "type": ["string", "null"], "default": null },
+          "output_schema_id": { "type": "string", "minLength": 1 },
+          "draft": { "$ref": "#/$defs/DraftAnswer" },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "cost_units": { "type": ["number", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "DraftAnswer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "final_text", "claims", "confidence", "followups"],
+        "properties": {
+          "mode": { "type": "string", "enum": ["ANSWER", "ABSTAIN", "ASK_CLARIFYING", "ANSWER_WITH_CONFLICTS"] },
+          "final_text": { "type": "string" },
+          "claims": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Claim" },
+            "default": []
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "followups": { "type": "array", "items": { "type": "string" }, "default": [] }
+        }
+      },
+  
+      "Claim": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_id", "text", "citations"],
+        "properties": {
+          "claim_id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "citations": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Citation" },
+            "default": []
+          }
+        }
+      },
+  
+      "Citation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["doc_id", "version_id", "chunk_id", "start_offset", "end_offset"],
+        "properties": {
+          "doc_id": { "type": "string", "minLength": 1 },
+          "version_id": { "type": "string", "minLength": 1 },
+          "chunk_id": { "type": "string", "minLength": 1 },
+          "start_offset": { "type": "integer", "minimum": 0 },
+          "end_offset": { "type": "integer", "minimum": 0 }
+        }
+      },
+  
+      "VerificationTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["verdict", "claim_checks", "repair_plan"],
+        "properties": {
+          "verdict": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "claim_checks": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/ClaimCheck" },
+            "default": []
+          },
+          "repair_plan": { "$ref": "#/$defs/RepairPlan" },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null }
+        }
+      },
+  
+      "ClaimCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_id", "status", "reason"],
+        "properties": {
+          "claim_id": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "reason": { "type": "string" }
+        }
+      },
+  
+      "RepairPlan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["should_retry", "suggested_plan_deltas"],
+        "properties": {
+          "should_retry": { "type": "boolean" },
+          "suggested_plan_deltas": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/PlanDelta" },
+            "default": []
+          }
+        }
+      },
+  
+      "PlanDelta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["op"],
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "add_sparse_phrase_query",
+              "increase_top_k",
+              "tighten_filters",
+              "relax_filters",
+              "graph_expand",
+              "invoke_late_interaction",
+              "invoke_neural_sparse",
+              "invoke_multimodal",
+              "apply_prf",
+              "rewrite_query"
+            ]
+          },
+          "target_step_id": { "type": ["string", "null"], "default": null },
+          "value": {
+            "type": ["string", "number", "integer", "object", "array", "boolean", "null"],
+            "default": null
+          },
+          "notes": { "type": ["string", "null"], "default": null }
+        }
+      },
+  
+      "CorrectiveLoopTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["iteration", "plan_deltas_applied", "retrieval_execution", "fusion", "rerank", "evidence_pack", "answerability", "generation", "verification"],
+        "properties": {
+          "iteration": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "plan_deltas_applied": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/PlanDelta" },
+            "default": []
+          },
+          "retrieval_execution": { "$ref": "#/$defs/RetrievalExecutionTrace" },
+          "fusion": { "$ref": "#/$defs/FusionTrace" },
+          "rerank": { "$ref": "#/$defs/RerankTrace" },
+          "evidence_pack": { "$ref": "#/$defs/EvidencePackTrace" },
+          "answerability": { "$ref": "#/$defs/AnswerabilityTrace" },
+          "generation": { "$ref": "#/$defs/GenerationTrace" },
+          "verification": { "$ref": "#/$defs/VerificationTrace" }
+        }
+      },
+  
+      "FinalResponseTrace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "text", "claims", "confidence", "clarifying_questions"],
+        "properties": {
+          "mode": { "type": "string", "enum": ["ANSWER", "ABSTAIN", "ASK_CLARIFYING", "ANSWER_WITH_CONFLICTS"] },
+          "text": { "type": "string" },
+          "claims": { "type": "array", "items": { "$ref": "#/$defs/Claim" }, "default": [] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "clarifying_questions": { "type": "array", "items": { "type": "string" }, "default": [] }
+        }
+      },
+  
+      "TraceMetrics": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "total_latency_ms": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "total_cost_units": { "type": ["number", "null"], "minimum": 0, "default": null },
+          "total_candidates": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "evidence_items": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "claim_count": { "type": ["integer", "null"], "minimum": 0, "default": null },
+          "claims_without_citations": { "type": ["integer", "null"], "minimum": 0, "default": null }
+        },
+        "default": {}
+      },
+  
+      "ErrorRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 },
+          "where": { "type": ["string", "null"], "default": null },
+          "details": { "type": ["object", "null"], "additionalProperties": true, "default": null }
+        }
+      },
+  
+      "ErrorRecordNullable": {
+        "oneOf": [
+          { "type": "null" },
+          { "$ref": "#/$defs/ErrorRecord" }
+        ]
+      },
+  
+      "TimeRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end"],
+        "properties": {
+          "start": { "type": ["string", "null"], "format": "date-time" },
+          "end": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+  
+      "FiltersEcho": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Echo of the plan filters applied for this step (kept flexible to avoid tight coupling)."
+      },
+  
+      "DocumentRefLite": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["doc_id", "version_id"],
+        "properties": {
+          "doc_id": { "type": "string", "minLength": 1 },
+          "version_id": { "type": "string", "minLength": 1 },
+          "source_type": { "type": ["string", "null"], "default": null },
+          "source_uri": { "type": ["string", "null"], "default": null }
+        }
+      },
+  
+      "ChunkRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chunk_id", "doc_id", "version_id", "section_path", "chunk_type", "start_offset", "end_offset"],
+        "properties": {
+          "chunk_id": { "type": "string", "minLength": 1 },
+          "doc_id": { "type": "string", "minLength": 1 },
+          "version_id": { "type": "string", "minLength": 1 },
+          "section_path": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "chunk_type": {
+            "type": "string",
+            "enum": ["text", "table", "code", "figure_caption", "image_region"]
+          },
+          "start_offset": { "type": "integer", "minimum": 0 },
+          "end_offset": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+  

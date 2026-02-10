@@ -1,0 +1,17 @@
+{
+  "description": "Golden test fixture for table OCR output",
+  "input_type": "region",
+  "prompt_version": "v1",
+  "expected_patterns": [
+    "must contain markdown table delimiter |",
+    "must contain at least 2 rows",
+    "should preserve column alignment"
+  ],
+  "sample_input_description": "A simple 3-column table with headers",
+  "sample_expected_output": "| Name | Age | City |\n|------|-----|------|\n| Alice | 30 | NYC |\n| Bob | 25 | LA |",
+  "validation_rules": {
+    "must_contain": ["|"],
+    "must_match_pattern": "\\|.*\\|.*\\|",
+    "min_lines": 2
+  }
+}

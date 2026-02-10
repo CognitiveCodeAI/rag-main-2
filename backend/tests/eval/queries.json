@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "description": "Evaluation queries with expected evidence for Graph RAG",
+  "queries": [
+    {
+      "id": "q1_fig_reference",
+      "query": "What does Figure 1 show about mobile commerce?",
+      "fixture": "fig_reference_basic",
+      "expected_evidence_labels": ["Figure 1"],
+      "expected_edge_types": ["references"],
+      "difficulty": "easy"
+    },
+    {
+      "id": "q2_table_data",
+      "query": "What are the regional revenue figures in Table 2?",
+      "fixture": "table_with_caption",
+      "expected_evidence_labels": ["Table 2"],
+      "expected_edge_types": ["references", "explained_by"],
+      "difficulty": "easy"
+    },
+    {
+      "id": "q3_cross_page",
+      "query": "What does Figure 3.1 show about quarterly performance?",
+      "fixture": "cross_page_reference",
+      "expected_evidence_labels": ["Figure 3.1"],
+      "expected_edge_types": ["references"],
+      "difficulty": "medium",
+      "note": "Figure is on page 1, references on page 3"
+    },
+    {
+      "id": "q4_western_region",
+      "query": "Which region had the best performance in Table 2?",
+      "fixture": "table_with_caption",
+      "expected_evidence_labels": ["Table 2"],
+      "expected_chunk_keywords": ["Western", "outperformed"],
+      "expected_edge_types": ["explained_by"],
+      "difficulty": "medium"
+    },
+    {
+      "id": "q5_methodology",
+      "query": "What analysis methods were used in the study?",
+      "fixture": "adjacent_context",
+      "expected_chunk_keywords": ["logistic regression", "variables"],
+      "expected_edge_types": ["adjacent_next", "adjacent_prev"],
+      "difficulty": "easy",
+      "note": "Requires adjacent chunk context"
+    },
+    {
+      "id": "q6_validation",
+      "query": "How were the results validated?",
+      "fixture": "adjacent_context",
+      "expected_chunk_keywords": ["k-fold", "cross-validation", "AUC"],
+      "expected_edge_types": ["adjacent_prev"],
+      "difficulty": "easy"
+    },
+    {
+      "id": "q7_tech_adoption",
+      "query": "What trends does Figure 5 show about technology adoption?",
+      "fixture": "figure_explains_data",
+      "expected_evidence_labels": ["Figure 5"],
+      "expected_chunk_keywords": ["shows", "illustrates", "depicts"],
+      "expected_edge_types": ["references", "explained_by"],
+      "difficulty": "medium"
+    },
+    {
+      "id": "q8_smartphone_plateau",
+      "query": "When did smartphone adoption plateau according to Figure 5?",
+      "fixture": "figure_explains_data",
+      "expected_evidence_labels": ["Figure 5"],
+      "expected_chunk_keywords": ["2020", "85%", "plateaued"],
+      "expected_edge_types": ["explained_by"],
+      "difficulty": "medium"
+    },
+    {
+      "id": "q9_q4_factors",
+      "query": "What factors contributed to Q4 growth in Figure 3.1?",
+      "fixture": "cross_page_reference",
+      "expected_evidence_labels": ["Figure 3.1"],
+      "expected_chunk_keywords": ["Contributing Factors", "digital marketing"],
+      "expected_edge_types": ["references"],
+      "difficulty": "hard"
+    },
+    {
+      "id": "q10_ar_vr_timeline",
+      "query": "When did AR/VR adoption begin accelerating according to Figure 5?",
+      "fixture": "figure_explains_data",
+      "expected_evidence_labels": ["Figure 5"],
+      "expected_chunk_keywords": ["2018", "2022", "emergence"],
+      "expected_edge_types": ["explained_by"],
+      "difficulty": "medium"
+    },
+    {
+      "id": "q11_limitations",
+      "query": "What limitations were noted in the research methodology?",
+      "fixture": "adjacent_context",
+      "expected_chunk_keywords": ["limitations", "urban", "seasonal"],
+      "expected_edge_types": ["adjacent_prev"],
+      "difficulty": "easy"
+    },
+    {
+      "id": "q12_eastern_region",
+      "query": "What does Table 2 say about the Eastern region?",
+      "fixture": "table_with_caption",
+      "expected_evidence_labels": ["Table 2"],
+      "expected_chunk_keywords": ["Eastern", "attention"],
+      "expected_edge_types": ["explained_by"],
+      "difficulty": "medium"
+    }
+  ],
+  "metrics": {
+    "evidence_recall_at_k": {
+      "k_values": [1, 3, 5, 10],
+      "description": "Did we retrieve the expected figure/table within top K results?"
+    },
+    "chunk_keyword_hit": {
+      "description": "Does the retrieved context contain expected keywords?"
+    },
+    "edge_coverage": {
+      "description": "Were expected edge types traversed during expansion?"
+    }
+  }
+}

@@ -1,0 +1,288 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://npr-rag.local/schemas/golden-record.v1.schema.json",
+    "title": "NPR Golden Set Record Schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "record_id",
+      "created_at",
+      "query",
+      "label",
+      "expected_behavior"
+    ],
+    "properties": {
+      "schema_version": { "type": "string", "const": "1.0" },
+  
+      "record_id": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+      },
+  
+      "created_at": { "type": "string", "format": "date-time" },
+      "updated_at": { "type": ["string", "null"], "format": "date-time", "default": null },
+  
+      "tags": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "default": []
+      },
+  
+      "query": { "$ref": "#/$defs/GoldenQuery" },
+  
+      "label": {
+        "type": "string",
+        "enum": ["answerable", "ambiguous", "unanswerable", "conflicting"]
+      },
+  
+      "expected_behavior": { "$ref": "#/$defs/ExpectedBehavior" },
+  
+      "expected_evidence": { "$ref": "#/$defs/ExpectedEvidence" },
+  
+      "notes": { "type": ["string", "null"], "default": null }
+    },
+  
+    "allOf": [
+      {
+        "if": { "properties": { "label": { "const": "answerable" } }, "required": ["label"] },
+        "then": {
+          "properties": {
+            "expected_behavior": {
+              "allOf": [
+                { "$ref": "#/$defs/ExpectedBehavior" },
+                {
+                  "type": "object",
+                  "properties": { "mode": { "const": "ANSWER" } },
+                  "required": ["mode"]
+                }
+              ]
+            },
+            "expected_evidence": {
+              "type": "object",
+              "required": ["expected_doc_ids"],
+              "properties": {
+                "expected_doc_ids": { "type": "array", "minItems": 1 }
+              }
+            }
+          },
+          "required": ["expected_evidence"]
+        }
+      },
+      {
+        "if": { "properties": { "label": { "const": "ambiguous" } }, "required": ["label"] },
+        "then": {
+          "properties": {
+            "expected_behavior": {
+              "allOf": [
+                { "$ref": "#/$defs/ExpectedBehavior" },
+                {
+                  "type": "object",
+                  "properties": { "mode": { "const": "ASK_CLARIFYING" } },
+                  "required": ["mode"]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "if": { "properties": { "label": { "const": "unanswerable" } }, "required": ["label"] },
+        "then": {
+          "properties": {
+            "expected_behavior": {
+              "allOf": [
+                { "$ref": "#/$defs/ExpectedBehavior" },
+                {
+                  "type": "object",
+                  "properties": { "mode": { "const": "ABSTAIN" } },
+                  "required": ["mode"]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "if": { "properties": { "label": { "const": "conflicting" } }, "required": ["label"] },
+        "then": {
+          "properties": {
+            "expected_behavior": {
+              "allOf": [
+                { "$ref": "#/$defs/ExpectedBehavior" },
+                {
+                  "type": "object",
+                  "properties": { "mode": { "const": "ANSWER_WITH_CONFLICTS" } },
+                  "required": ["mode"]
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+  
+    "$defs": {
+      "GoldenQuery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "constraints"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1 },
+  
+          "constraints": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["time_range", "product", "component", "version", "environment", "language"],
+            "properties": {
+              "time_range": { "$ref": "#/$defs/TimeRange" },
+              "product": { "type": ["string", "null"], "default": null },
+              "component": { "type": ["string", "null"], "default": null },
+              "version": { "type": ["string", "null"], "default": null },
+              "environment": { "type": ["string", "null"], "default": null },
+              "language": { "type": ["string", "null"], "default": null }
+            }
+          },
+  
+          "context": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "conversation_summary": { "type": ["string", "null"], "default": null },
+              "user_profile_allowed": { "type": "boolean", "default": false }
+            },
+            "default": {}
+          }
+        }
+      },
+  
+      "ExpectedBehavior": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode"],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["ANSWER", "ASK_CLARIFYING", "ABSTAIN", "ANSWER_WITH_CONFLICTS"]
+          },
+  
+          "clarifying_questions": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 0,
+            "maxItems": 3,
+            "default": []
+          },
+  
+          "abstain_reason_contains": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "default": [],
+            "description": "Substrings expected in the abstention rationale (for weak matching)."
+          },
+  
+          "answer_requirements": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "must_include_substrings": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "default": []
+              },
+              "must_not_include_substrings": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "default": []
+              },
+              "max_claims": { "type": ["integer", "null"], "minimum": 1, "maximum": 50, "default": null }
+            },
+            "default": {}
+          },
+  
+          "citation_policy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "require_citations_for_all_claims": { "type": "boolean", "default": true },
+              "min_citations_per_claim": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1 }
+            },
+            "default": { "require_citations_for_all_claims": true, "min_citations_per_claim": 1 }
+          },
+  
+          "conflict_expectations": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "topic": { "type": ["string", "null"], "default": null },
+              "must_present_multiple_versions": { "type": "boolean", "default": true }
+            },
+            "default": {}
+          }
+        }
+      },
+  
+      "ExpectedEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expected_doc_ids": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "default": []
+          },
+  
+          "allowed_doc_ids": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "default": [],
+            "description": "Optional allow-list for docs; if provided, citations must come from this set."
+          },
+  
+          "expected_spans": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/ExpectedSpan" },
+            "default": [],
+            "description": "Optional: exact spans we expect to be cited."
+          },
+  
+          "min_unique_docs_cited": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 20,
+            "default": null
+          }
+        }
+      },
+  
+      "ExpectedSpan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["doc_id", "version_id", "chunk_id", "start_offset", "end_offset"],
+        "properties": {
+          "doc_id": { "type": "string", "minLength": 1 },
+          "version_id": { "type": "string", "minLength": 1 },
+          "chunk_id": { "type": "string", "minLength": 1 },
+          "start_offset": { "type": "integer", "minimum": 0 },
+          "end_offset": { "type": "integer", "minimum": 0 },
+          "text_contains": {
+            "type": ["string", "null"],
+            "default": null,
+            "description": "Optional substring expected within the cited span."
+          }
+        }
+      },
+  
+      "TimeRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end"],
+        "properties": {
+          "start": { "type": ["string", "null"], "format": "date-time" },
+          "end": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    }
+  }
+  

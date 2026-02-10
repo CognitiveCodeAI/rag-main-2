@@ -1,0 +1,17 @@
+{
+  "description": "Golden test fixture for full page OCR output",
+  "input_type": "full_page",
+  "prompt_version": "v1",
+  "expected_patterns": [
+    "should preserve heading structure with # syntax",
+    "should preserve paragraph breaks",
+    "should convert lists to markdown format"
+  ],
+  "sample_input_description": "A document page with heading, paragraphs, and bullet list",
+  "sample_expected_output": "# Introduction\n\nThis is the first paragraph of the document. It contains important information about the topic.\n\nThis is the second paragraph with more details.\n\n## Key Points\n\n- First bullet point\n- Second bullet point\n- Third bullet point",
+  "validation_rules": {
+    "must_contain": ["#"],
+    "should_not_contain": ["[Image description:", "I can see"],
+    "min_paragraphs": 1
+  }
+}

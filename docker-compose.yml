@@ -1,0 +1,157 @@
+# RAG Document Chat System - Infrastructure
+# 
+# Usage:
+#   docker-compose up -d      # Start all services
+#   docker-compose down       # Stop all services
+#   docker-compose logs -f    # View logs
+#
+# Configuration:
+#   Copy .env.docker to .env to customize settings (optional).
+#   Default values work out of the box for local development.
+#
+# Services:
+#   - PostgreSQL (5432) - Document metadata
+#   - Milvus (19530) - Vector database
+#   - MinIO (9000/9001) - Object storage
+#   - Redis (6379) - Task queue
+
+version: '3.8'
+
+services:
+  # ===========================================
+  # PostgreSQL - Document metadata & graph
+  # ===========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: rag-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpass}
+      POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ===========================================
+  # Milvus - Vector database (Standalone)
+  # ===========================================
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: rag-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  minio-milvus:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: rag-minio-milvus
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_MILVUS_PORT:-9010}:9000"  # Different port to avoid conflict with main MinIO
+    volumes:
+      - minio_milvus_data:/minio_data
+    command: minio server /minio_data --console-address ":9011"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.3.16
+    container_name: rag-milvus
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio-milvus:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+      - "${MILVUS_METRICS_PORT:-9091}:9091"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio-milvus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  # ===========================================
+  # MinIO - Object storage for documents
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: rag-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"   # API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"   # Console
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  # ===========================================
+  # Redis - Task queue for background jobs
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  etcd_data:
+  minio_milvus_data:
+  milvus_data:
+  minio_data:
+  redis_data:
+
+networks:
+  default:
+    name: rag-network

@@ -1,0 +1,143 @@
+# ===========================================
+# NPR RAG System - Root .gitignore
+# ===========================================
+
+# -----------------------
+# Environment & Secrets
+# -----------------------
+.env
+.env.*
+!.env.example
+bkup.env
+*.pem
+*.key
+
+# -----------------------
+# Python
+# -----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# -----------------------
+# Node.js / Frontend
+# -----------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+
+# -----------------------
+# IDE & Editors
+# -----------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------
+# OS Files
+# -----------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# -----------------------
+# Testing & Coverage
+# -----------------------
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# -----------------------
+# Build Artifacts
+# -----------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# -----------------------
+# Database
+# -----------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# -----------------------
+# Docker
+# -----------------------
+# Don't ignore docker-compose.yml (needed for setup)
+# But ignore local overrides
+docker-compose.override.yml
+docker-compose.local.yml
+
+# -----------------------
+# Application Specific
+# -----------------------
+# Uploaded documents (use object storage in production)
+uploads/
+temp/
+
+# Large test files (should use fixtures)
+*.pdf
+!backend/tests/docs/*.pdf
+!backend/tests/eval/fixtures/*.pdf
+
+# Test documents (proprietary/client files)
+test docs/
+
+# Generated files
+openapi.json
+nul
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json

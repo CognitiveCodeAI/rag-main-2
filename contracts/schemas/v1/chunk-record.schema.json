@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://npr-rag.local/schemas/chunk-record.v1.schema.json",
+  "title": "NPR ChunkRecord Schema",
+  "description": "A retrieval unit created from DocumentIR with structure-aware logic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "chunk_ref",
+    "fields"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "chunk_ref": {
+      "$ref": "#/$defs/ChunkRef"
+    },
+    "fields": {
+      "$ref": "#/$defs/ChunkFields"
+    },
+    "metadata": {
+      "$ref": "#/$defs/ChunkMetadata"
+    }
+  },
+
+  "$defs": {
+    "ChunkRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chunk_id",
+        "doc_id",
+        "version_id",
+        "section_path",
+        "chunk_type",
+        "start_offset",
+        "end_offset"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]{1,256}$"
+        },
+        "doc_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "section_path": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "chunk_type": {
+          "type": "string",
+          "enum": ["text", "table", "code", "figure_caption", "image_region"]
+        },
+        "start_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_offset": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+
+    "ChunkFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body"],
+      "properties": {
+        "title": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "heading_context": {
+          "type": ["string", "null"],
+          "description": "Concatenated heading hierarchy for context",
+          "default": null
+        },
+        "body": {
+          "type": "string",
+          "description": "Main chunk text content"
+        },
+        "table_struct": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "description": "Structured table data if chunk_type is table",
+          "default": null
+        },
+        "code_lang": {
+          "type": ["string", "null"],
+          "description": "Programming language if chunk_type is code",
+          "default": null
+        },
+        "entities_str": {
+          "type": ["string", "null"],
+          "description": "Extracted entities as string for embedding",
+          "default": null
+        },
+        "context_str": {
+          "type": ["string", "null"],
+          "description": "Additional context for contextual retrieval",
+          "default": null
+        }
+      }
+    },
+
+    "ChunkMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doc_type": {
+          "type": ["string", "null"],
+          "enum": ["policy", "spec", "runbook", "ticket", "email", "other", null],
+          "default": null
+        },
+        "products": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "components": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "time_range": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "end": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            }
+          },
+          "default": null
+        },
+        "version_tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "entities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Entity" },
+          "default": []
+        },
+        "authority_tier": {
+          "type": ["string", "null"],
+          "enum": ["TIER_1", "TIER_2", "TIER_3", null],
+          "default": null
+        },
+        "recency_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "default": null
+        },
+        "injection_risk_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "default": null
+        },
+        "pii_present": {
+          "type": ["boolean", "null"],
+          "default": null
+        },
+        "secrets_present": {
+          "type": ["boolean", "null"],
+          "default": null
+        }
+      },
+      "default": {}
+    },
+
+    "Entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": ["string", "null"],
+          "default": null
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "default": null
+        }
+      }
+    }
+  }
+}

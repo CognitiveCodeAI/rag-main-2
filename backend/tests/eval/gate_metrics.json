@@ -1,0 +1,11 @@
+{
+  "baseline_seed_precision_at_5": 0.2,
+  "baseline_evidence_recall": 0.5,
+  "rerank_seed_precision_at_5": 0.2,
+  "rerank_evidence_recall": 0.5,
+  "rerank_ab_improvement_at_5": 0.0,
+  "rerank_latency_overhead_pct": 1.944005040690164,
+  "rerank_degeneracy_rate": 0.0,
+  "baseline_precision_trend": 0.0,
+  "timestamp": "2026-01-29T01:00:04.140589"
+}

@@ -1,0 +1,351 @@
+{
+    "embedding_templates_spec": {
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://npr-rag.local/schemas/embedding-templates.v1.schema.json",
+        "title": "NPR Embedding Templates Spec",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "template_engine", "allowed_placeholders", "templates"],
+        "properties": {
+          "schema_version": { "type": "string", "const": "1.0" },
+          "template_engine": {
+            "type": "string",
+            "enum": ["mustache"],
+            "description": "Templates use {{placeholder}} substitution; no logic/conditionals required."
+          },
+          "allowed_placeholders": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "All placeholders that may appear in any template.content."
+          },
+          "templates": {
+            "type": "array",
+            "minItems": 3,
+            "items": { "$ref": "#/$defs/Template" }
+          }
+        },
+        "$defs": {
+          "Template": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["template_id", "template_type", "version", "content", "placeholders_used"],
+            "properties": {
+              "template_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+              },
+              "template_type": {
+                "type": "string",
+                "enum": ["query", "doc", "contextual_header"]
+              },
+              "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+              "content": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The exact string used for embedding input after placeholder substitution."
+              },
+              "placeholders_used": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Must be a subset of allowed_placeholders."
+              },
+              "notes": { "type": ["string", "null"], "default": null }
+            }
+          }
+        }
+      },
+      "defaults": {
+        "schema_version": "1.0",
+        "template_engine": "mustache",
+        "allowed_placeholders": [
+          "user_query",
+          "normalized_query",
+          "language",
+          "intent",
+          "time_range_start",
+          "time_range_end",
+          "product",
+          "component",
+          "version",
+          "environment",
+          "acronym_expansions",
+          "synonym_expansions",
+          "doc_id",
+          "doc_version_id",
+          "source_uri",
+          "doc_title",
+          "doc_type",
+          "authority_tier",
+          "recency_bucket",
+          "section_path",
+          "heading_context",
+          "entities_str",
+          "chunk_type",
+          "chunk_text",
+          "table_text",
+          "code_text",
+          "doc_summary"
+        ],
+        "templates": [
+          {
+            "template_id": "query.embed.v1",
+            "template_type": "query",
+            "version": "1.0",
+            "placeholders_used": [
+              "normalized_query",
+              "intent",
+              "language",
+              "time_range_start",
+              "time_range_end",
+              "product",
+              "component",
+              "version",
+              "environment",
+              "acronym_expansions",
+              "synonym_expansions"
+            ],
+            "content": "QUERY\nintent={{intent}}\nlanguage={{language}}\ntime_start={{time_range_start}}\ntime_end={{time_range_end}}\nproduct={{product}}\ncomponent={{component}}\nversion={{version}}\nenvironment={{environment}}\nacronyms={{acronym_expansions}}\nsynonyms={{synonym_expansions}}\ntext={{normalized_query}}\n",
+            "notes": "Used for dense/neural-sparse/late-interaction query-side representations. Empty/null placeholders must be rendered as empty strings."
+          },
+          {
+            "template_id": "doc.chunk.embed.v1",
+            "template_type": "doc",
+            "version": "1.0",
+            "placeholders_used": [
+              "doc_title",
+              "doc_type",
+              "section_path",
+              "heading_context",
+              "chunk_type",
+              "chunk_text",
+              "table_text",
+              "code_text"
+            ],
+            "content": "DOCUMENT_CHUNK\nTitle: {{doc_title}}\nType: {{doc_type}}\nSectionPath: {{section_path}}\nHeadingContext: {{heading_context}}\nChunkType: {{chunk_type}}\n\nTEXT:\n{{chunk_text}}\n\nTABLE_TEXT:\n{{table_text}}\n\nCODE_TEXT:\n{{code_text}}\n",
+            "notes": "Primary doc-side content view. For chunk_type=text, table_text/code_text render empty. For chunk_type=table/code, chunk_text may be empty but never omit fields."
+          },
+          {
+            "template_id": "doc.contextual_header.v1",
+            "template_type": "contextual_header",
+            "version": "1.0",
+            "placeholders_used": [
+              "doc_id",
+              "doc_version_id",
+              "source_uri",
+              "doc_title",
+              "doc_type",
+              "authority_tier",
+              "recency_bucket",
+              "section_path",
+              "heading_context",
+              "entities_str",
+              "doc_summary"
+            ],
+            "content": "CONTEXT_HEADER\nDocID: {{doc_id}}\nVersionID: {{doc_version_id}}\nSourceURI: {{source_uri}}\nTitle: {{doc_title}}\nType: {{doc_type}}\nAuthorityTier: {{authority_tier}}\nRecency: {{recency_bucket}}\nSectionPath: {{section_path}}\nHeadingContext: {{heading_context}}\nEntities: {{entities_str}}\nDocSummary: {{doc_summary}}\n",
+            "notes": "Used to build contextual embeddings by prepending this header to a doc chunk. This header is never used as answer text; it exists purely to improve retrieval."
+          }
+        ]
+      }
+    },
+  
+    "multi_view_vector_record_spec": {
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://npr-rag.local/schemas/multi-view-vector-record.v1.schema.json",
+        "title": "NPR Multi-View Vector Record",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "record_id",
+          "created_at",
+          "chunk_ref",
+          "views"
+        ],
+        "properties": {
+          "schema_version": { "type": "string", "const": "1.0" },
+  
+          "record_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,256}$",
+            "description": "Stable ID for the vector record, e.g., vec:{chunk_id}:{embedding_bundle_version}"
+          },
+  
+          "created_at": { "type": "string", "format": "date-time" },
+  
+          "chunk_ref": { "$ref": "#/$defs/ChunkRef" },
+  
+          "embedding_bundle_version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+$",
+            "default": "1.0",
+            "description": "Bump when you change templates, preprocessing, or which views are stored."
+          },
+  
+          "preprocessing": { "$ref": "#/$defs/Preprocessing" },
+  
+          "views": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["vec_content", "vec_contextual", "vec_title_heading", "vec_entities"],
+            "properties": {
+              "vec_content": { "$ref": "#/$defs/VectorView" },
+              "vec_contextual": { "$ref": "#/$defs/VectorView" },
+              "vec_title_heading": { "$ref": "#/$defs/VectorView" },
+              "vec_entities": { "$ref": "#/$defs/VectorView" },
+              "vec_doc_summary": { "$ref": "#/$defs/VectorView" }
+            }
+          }
+        },
+  
+        "$defs": {
+          "ChunkRef": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "chunk_id",
+              "doc_id",
+              "version_id",
+              "section_path",
+              "chunk_type",
+              "start_offset",
+              "end_offset"
+            ],
+            "properties": {
+              "chunk_id": { "type": "string", "minLength": 1 },
+              "doc_id": { "type": "string", "minLength": 1 },
+              "version_id": { "type": "string", "minLength": 1 },
+              "section_path": { "type": "array", "items": { "type": "string" }, "default": [] },
+              "chunk_type": {
+                "type": "string",
+                "enum": ["text", "table", "code", "figure_caption", "image_region"]
+              },
+              "start_offset": { "type": "integer", "minimum": 0 },
+              "end_offset": { "type": "integer", "minimum": 0 }
+            }
+          },
+  
+          "Preprocessing": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["normalization_id", "language", "tokenizer_hint"],
+            "properties": {
+              "normalization_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Identifier for deterministic text normalization rules applied before templating (e.g., whitespace, unicode normalize)."
+              },
+              "language": { "type": ["string", "null"], "default": null, "description": "BCP-47 if known" },
+              "tokenizer_hint": {
+                "type": ["string", "null"],
+                "default": null,
+                "description": "Optional: tokenizer family/name used by the embedding model."
+              },
+              "redactions_applied": { "type": "boolean", "default": false },
+              "notes": { "type": ["string", "null"], "default": null }
+            }
+          },
+  
+          "VectorView": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "view_id",
+              "embedding_model_id",
+              "dim",
+              "normalize",
+              "input_template_id",
+              "input_template_version",
+              "input_fingerprint",
+              "vector"
+            ],
+            "properties": {
+              "view_id": {
+                "type": "string",
+                "enum": ["vec_content", "vec_contextual", "vec_title_heading", "vec_entities", "vec_doc_summary"]
+              },
+  
+              "embedding_model_id": { "type": "string", "minLength": 1 },
+  
+              "dim": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536,
+                "description": "Invariant: dim MUST equal the length of vector[]. Enforce in code."
+              },
+  
+              "normalize": {
+                "type": "boolean",
+                "description": "Whether the vector is L2-normalized before indexing (recommended for cosine similarity)."
+              },
+  
+              "input_template_id": { "type": "string", "minLength": 1 },
+              "input_template_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+  
+              "input_fingerprint": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Deterministic hash of the fully-rendered embedding input string (e.g., sha256 hex)."
+              },
+  
+              "rendering": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "rendered_input_preview": {
+                    "type": ["string", "null"],
+                    "default": null,
+                    "description": "Optional, truncated preview for debugging. Do not store full text if you want minimal trace storage."
+                  },
+                  "rendered_input_bytes": {
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "default": null
+                  }
+                },
+                "default": {}
+              },
+  
+              "vector": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 1,
+                "description": "Embedding vector. Invariant: length(vector) == dim (enforced in code)."
+              },
+  
+              "dim_variant": {
+                "type": ["object", "null"],
+                "default": null,
+                "additionalProperties": false,
+                "properties": {
+                  "full_dim": { "type": "integer", "minimum": 1 },
+                  "truncated_dim": { "type": "integer", "minimum": 1 },
+                  "method": { "type": "string", "enum": ["TRUNCATION", "MRL", "API_DIM_PARAM", "OTHER"] }
+                },
+                "description": "Use when storing truncated embeddings for multi-stage retrieval. If null, dim is the native/full dim."
+              },
+  
+              "created_at": {
+                "type": ["string", "null"],
+                "format": "date-time",
+                "default": null,
+                "description": "Optional per-view creation timestamp (record-level created_at still required)."
+              }
+            }
+          }
+        }
+      },
+  
+      "invariants_to_enforce_in_code": [
+        "len(view.vector) == view.dim",
+        "view.view_id key must match view.view_id field",
+        "input_fingerprint must be computed from the fully rendered string after normalization and placeholder substitution",
+        "vec_contextual rendered input MUST equal: contextual_header_template(rendered) + '\\n' + doc_template(rendered)",
+        "All views must use the same normalization_id for a given embedding_bundle_version",
+        "Any change to templates, placeholder rendering rules, normalization, or included metadata requires bumping embedding_bundle_version and re-embedding"
+      ]
+    }
+  }
+  

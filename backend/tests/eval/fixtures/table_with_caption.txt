@@ -1,0 +1,26 @@
+PAGE 1
+
+# Revenue Analysis
+
+The following table summarizes quarterly revenue across regions.
+
+Table 2: Regional Revenue Q1-Q4 2024 (in millions USD)
+
+| Region    | Q1    | Q2    | Q3    | Q4    | Total  |
+|-----------|-------|-------|-------|-------|--------|
+| North     | 125   | 142   | 158   | 189   | 614    |
+| South     | 98    | 105   | 112   | 145   | 460    |
+| East      | 87    | 91    | 102   | 118   | 398    |
+| West      | 156   | 178   | 195   | 221   | 750    |
+
+Table 2 shows that the Western region consistently outperformed other regions throughout the year. The growth trajectory in Q4 indicates strong holiday season performance.
+
+The North region showed steady improvement, with a particularly strong Q4 that exceeded expectations by 15%.
+
+## Analysis
+
+Looking at Table 2, we can identify several trends:
+
+1. Western region dominance
+2. Q4 surge across all regions
+3. Eastern region needs attention

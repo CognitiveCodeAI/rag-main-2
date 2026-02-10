@@ -1,0 +1,23 @@
+{
+  "version": "adversarial_v1",
+  "description": "Adversarial questions that should trigger abstention - topics NOT covered in 2404.08865v1.pdf",
+  "pdf_path": "tests/docs/2404.08865v1.pdf",
+  "questions": [
+    {
+      "id": "adv1",
+      "question": "What is the SQuAD accuracy reported in this paper?",
+      "expected_evidence": [],
+      "expected_keywords": [],
+      "expected_figures": [],
+      "notes": "SQuAD benchmark is NOT mentioned in this paper - should abstain"
+    },
+    {
+      "id": "adv2",
+      "question": "How does this paper compare to the RAG benchmark results from BEIR or MTEB?",
+      "expected_evidence": [],
+      "expected_keywords": [],
+      "expected_figures": [],
+      "notes": "BEIR/MTEB RAG benchmarks are NOT discussed - should abstain"
+    }
+  ]
+}

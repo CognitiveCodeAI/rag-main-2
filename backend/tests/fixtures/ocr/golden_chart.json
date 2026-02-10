@@ -1,0 +1,17 @@
+{
+  "description": "Golden test fixture for chart/figure OCR output",
+  "input_type": "region",
+  "prompt_version": "v1",
+  "expected_patterns": [
+    "should extract axis labels",
+    "should extract legend text",
+    "should extract visible numbers/values"
+  ],
+  "sample_input_description": "A bar chart showing sales by quarter",
+  "sample_expected_output": "X-axis: Quarter\nY-axis: Sales ($M)\n\nQ1: 2.5\nQ2: 3.2\nQ3: 4.1\nQ4: 3.8\n\nLegend: 2024 Sales Data",
+  "validation_rules": {
+    "must_contain_one_of": ["axis", "x-axis", "y-axis", "X-axis", "Y-axis"],
+    "should_contain_numbers": true,
+    "should_not_contain": ["I see a chart", "This appears to be"]
+  }
+}

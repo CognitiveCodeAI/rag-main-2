@@ -1,0 +1,150 @@
+{
+  "version": "v2",
+  "description": "Golden question set v2 for evaluating RAG with query normalization, section boosting, and node-based evidence. Based on 2404.08865v1.pdf (Needle-in-a-Haystack paper).",
+  "pdf_path": "tests/docs/2404.08865v1.pdf",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "In this paper, what task is used to measure an LLM's ability to retrieve information from the prompt? (Use the paper's terminology.)",
+      "expected_evidence": [
+        {
+          "key_phrases": ["needle-in-a-haystack", "needle in a haystack", "in-context recall", "factoid retrieval"],
+          "section_hint": "Methodology"
+        }
+      ],
+      "expected_keywords": ["needle", "haystack", "retrieval", "recall"],
+      "expected_figures": [],
+      "notes": "Tests synonym bridge: key-value retrieval -> needle-in-a-haystack"
+    },
+    {
+      "id": "q2",
+      "question": "What is the haystack (filler text) sourced from, and what are the three tests called?",
+      "expected_evidence": [
+        {
+          "key_phrases": ["Paul Graham", "essays", "PistachioAI", "San Francisco", "Thornfield Hollow"],
+          "label": "Table 2",
+          "acceptable_evidence": [
+            {"key_phrases": ["Paul Graham essays"]},
+            {"key_phrases": ["PistachioAI"]},
+            {"key_phrases": ["San Francisco", "needle"]},
+            {"key_phrases": ["Thornfield Hollow"]}
+          ]
+        }
+      ],
+      "expected_keywords": ["Paul Graham", "essays", "PistachioAI", "San Francisco", "Thornfield"],
+      "expected_figures": ["Table 2"],
+      "notes": "Tests dataset/source retrieval - should now PASS with synonym expansion"
+    },
+    {
+      "id": "q3",
+      "question": "List the three factoid/question pairs used in the tests (Table 2).",
+      "expected_evidence": [
+        {
+          "label": "Table 2",
+          "key_phrases": ["PistachioAI", "San Francisco", "Thornfield Hollow", "most delicious", "best thing to do", "magic item"]
+        }
+      ],
+      "expected_keywords": ["PistachioAI", "pistachio", "San Francisco", "Thornfield"],
+      "expected_figures": ["Table 2"],
+      "notes": "Table 2 targeted question"
+    },
+    {
+      "id": "q4",
+      "question": "How do they vary haystack length and needle position, and what distributions do they use?",
+      "expected_evidence": [
+        {
+          "section_hint": "Methodology",
+          "key_phrases": ["tokens", "position", "linear", "sigmoid", "distribution", "haystack length"]
+        }
+      ],
+      "expected_keywords": ["tokens", "position", "linear", "sigmoid", "distribution"],
+      "expected_figures": [],
+      "notes": "Methodology targeted (section-aware)"
+    },
+    {
+      "id": "q5",
+      "question": "What are the three components of the needle-in-a-haystack prompt?",
+      "expected_evidence": [
+        {
+          "section_hint": "Methodology",
+          "key_phrases": ["prompt", "haystack", "needle", "question", "filler", "component"]
+        }
+      ],
+      "expected_keywords": ["haystack", "needle", "question", "prompt"],
+      "expected_figures": [],
+      "notes": "Prompt structure targeted (section-aware)"
+    },
+    {
+      "id": "q6",
+      "question": "Describe the 1-5 scoring rubric used to grade responses (what does 5 vs 1 mean).",
+      "expected_evidence": [
+        {
+          "label": "Table 4",
+          "section_hint": "Appendix",
+          "key_phrases": ["score", "1-5", "rubric", "correct", "incorrect", "grading", "evaluation"],
+          "acceptable_evidence": [
+            {"key_phrases": ["5 means", "correct"]},
+            {"key_phrases": ["1 means", "incorrect"]},
+            {"key_phrases": ["scoring rubric"]},
+            {"label": "Appendix C"}
+          ]
+        }
+      ],
+      "expected_keywords": ["score", "rubric", "correct", "incorrect"],
+      "expected_figures": ["Table 4"],
+      "notes": "Scoring criteria targeted (should hit Table 4 / Appendix C)"
+    },
+    {
+      "id": "q7",
+      "question": "Which model is used as the judge, and what is the judge instructed to output?",
+      "expected_evidence": [
+        {
+          "section_hint": "Appendix",
+          "key_phrases": ["GPT-4", "judge", "score", "output", "evaluation"]
+        }
+      ],
+      "expected_keywords": ["GPT-4", "judge", "score"],
+      "expected_figures": [],
+      "notes": "Judge method (Appendix C)"
+    },
+    {
+      "id": "q8",
+      "question": "Why does performance degrade when prompts conflict with training data? Use the San Francisco vs Thornfield Hollow comparison.",
+      "expected_evidence": [
+        {
+          "section_hint": "Discussion",
+          "key_phrases": ["San Francisco", "Thornfield Hollow", "training data", "conflict", "performance", "degraded"]
+        }
+      ],
+      "expected_keywords": ["San Francisco", "Thornfield", "training", "conflict"],
+      "expected_figures": [],
+      "notes": "Training-data conflict effect (Discussion)"
+    },
+    {
+      "id": "q9",
+      "question": "What conclusion do the authors draw when comparing Llama 2 13B vs 70B?",
+      "expected_evidence": [
+        {
+          "section_hint": "Discussion",
+          "key_phrases": ["Llama", "13B", "70B", "parameter", "size", "performance"]
+        }
+      ],
+      "expected_keywords": ["Llama", "13B", "70B", "parameter"],
+      "expected_figures": [],
+      "notes": "Parameter count insight (Discussion)"
+    },
+    {
+      "id": "q10",
+      "question": "Summarize the main takeaways from the Conclusion about what affects recall and what can improve it.",
+      "expected_evidence": [
+        {
+          "section_hint": "Conclusion",
+          "key_phrases": ["conclusion", "recall", "improve", "affect", "findings", "future", "recommendation"]
+        }
+      ],
+      "expected_keywords": ["recall", "improve", "conclusion"],
+      "expected_figures": [],
+      "notes": "Conclusion / recommendations test (section-aware)"
+    }
+  ]
+}

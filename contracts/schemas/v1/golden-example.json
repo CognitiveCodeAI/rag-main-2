@@ -1,0 +1,174 @@
+{
+    "schema_version": "1.0",
+    "dataset_id": "golden-set-example-v1",
+    "created_at": "2026-01-13T16:00:00Z",
+    "records": [
+      {
+        "schema_version": "1.0",
+        "record_id": "qa.answerable.rollback-procedure.v1",
+        "created_at": "2026-01-13T16:00:00Z",
+        "tags": ["runbook", "procedures", "citations_required"],
+        "query": {
+          "text": "What is the rollback procedure for the payments service deployment?",
+          "constraints": {
+            "time_range": { "start": null, "end": null },
+            "product": "payments",
+            "component": null,
+            "version": null,
+            "environment": "prod",
+            "language": "en-US"
+          },
+          "context": { "conversation_summary": null, "user_profile_allowed": false }
+        },
+        "label": "answerable",
+        "expected_behavior": {
+          "mode": "ANSWER",
+          "answer_requirements": {
+            "must_include_substrings": ["rollback"],
+            "must_not_include_substrings": ["I think", "probably"],
+            "max_claims": 12
+          },
+          "citation_policy": { "require_citations_for_all_claims": true, "min_citations_per_claim": 1 }
+        },
+        "expected_evidence": {
+          "expected_doc_ids": ["doc:runbook-payments-deployments"],
+          "expected_spans": [],
+          "min_unique_docs_cited": 1
+        },
+        "notes": "Should cite the rollback section; may include prerequisites and verification steps."
+      },
+  
+      {
+        "schema_version": "1.0",
+        "record_id": "qa.ambiguous.deployments.missing-product.v1",
+        "created_at": "2026-01-13T16:00:00Z",
+        "tags": ["ambiguous", "clarify", "planner"],
+        "query": {
+          "text": "How do we do deployments?",
+          "constraints": {
+            "time_range": { "start": null, "end": null },
+            "product": null,
+            "component": null,
+            "version": null,
+            "environment": null,
+            "language": "en-US"
+          },
+          "context": { "conversation_summary": null, "user_profile_allowed": false }
+        },
+        "label": "ambiguous",
+        "expected_behavior": {
+          "mode": "ASK_CLARIFYING",
+          "clarifying_questions": [
+            "Which product or service is this for?",
+            "Which environment (prod/staging/dev)?"
+          ],
+          "citation_policy": { "require_citations_for_all_claims": true, "min_citations_per_claim": 1 }
+        },
+        "expected_evidence": {
+          "expected_doc_ids": [],
+          "expected_spans": []
+        },
+        "notes": "Must ask targeted questions; must not provide a confident procedural answer."
+      },
+  
+      {
+        "schema_version": "1.0",
+        "record_id": "qa.unanswerable.project-plan-2026.v1",
+        "created_at": "2026-01-13T16:00:00Z",
+        "tags": ["unanswerable", "abstain", "coverage"],
+        "query": {
+          "text": "What is our plan for Project X in 2026?",
+          "constraints": {
+            "time_range": { "start": "2026-01-01T00:00:00Z", "end": "2026-12-31T23:59:59Z" },
+            "product": null,
+            "component": null,
+            "version": null,
+            "environment": null,
+            "language": "en-US"
+          },
+          "context": { "conversation_summary": null, "user_profile_allowed": false }
+        },
+        "label": "unanswerable",
+        "expected_behavior": {
+          "mode": "ABSTAIN",
+          "abstain_reason_contains": ["couldn’t find", "evidence", "corpus"],
+          "answer_requirements": {
+            "must_not_include_substrings": ["definitely", "the plan is"],
+            "max_claims": 3
+          }
+        },
+        "expected_evidence": {
+          "expected_doc_ids": [],
+          "expected_spans": []
+        },
+        "notes": "Should abstain and suggest what additional info/docs would be needed."
+      },
+  
+      {
+        "schema_version": "1.0",
+        "record_id": "qa.conflicting.sla.payments.v1",
+        "created_at": "2026-01-13T16:00:00Z",
+        "tags": ["conflict", "policy", "authority-tier"],
+        "query": {
+          "text": "What is the SLA for payments?",
+          "constraints": {
+            "time_range": { "start": null, "end": null },
+            "product": "payments",
+            "component": null,
+            "version": null,
+            "environment": null,
+            "language": "en-US"
+          },
+          "context": { "conversation_summary": null, "user_profile_allowed": false }
+        },
+        "label": "conflicting",
+        "expected_behavior": {
+          "mode": "ANSWER_WITH_CONFLICTS",
+          "conflict_expectations": { "topic": "SLA", "must_present_multiple_versions": true },
+          "citation_policy": { "require_citations_for_all_claims": true, "min_citations_per_claim": 1 }
+        },
+        "expected_evidence": {
+          "expected_doc_ids": ["doc:policy-sla-2024", "doc:slide-deck-sla-2022"],
+          "expected_spans": [],
+          "min_unique_docs_cited": 2
+        },
+        "notes": "Must surface the conflict or apply source-of-truth policy explicitly with citations."
+      },
+  
+      {
+        "schema_version": "1.0",
+        "record_id": "qa.noisy-id.typo.incident-code.v1",
+        "created_at": "2026-01-13T16:00:00Z",
+        "tags": ["noisy", "ids", "sparse"],
+        "query": {
+          "text": "What does error INC-19O73 mean?",
+          "constraints": {
+            "time_range": { "start": null, "end": null },
+            "product": null,
+            "component": null,
+            "version": null,
+            "environment": null,
+            "language": "en-US"
+          },
+          "context": { "conversation_summary": null, "user_profile_allowed": false }
+        },
+        "label": "answerable",
+        "expected_behavior": {
+          "mode": "ANSWER",
+          "answer_requirements": {
+            "must_include_substrings": ["INC-19073"],
+            "must_not_include_substrings": ["INC-19O73 is definitely"],
+            "max_claims": 8
+          },
+          "citation_policy": { "require_citations_for_all_claims": true, "min_citations_per_claim": 1 }
+        },
+        "expected_evidence": {
+          "expected_doc_ids": ["doc:runbook-incidents"],
+          "expected_spans": [],
+          "min_unique_docs_cited": 1
+        },
+        "notes": "System should detect O vs 0 typo; present correction as an assumption and cite the runbook."
+      }
+    ]
+  }
+  

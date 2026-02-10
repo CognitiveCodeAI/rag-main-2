@@ -1,0 +1,32 @@
+{
+  "name": "@npr/contracts",
+  "version": "1.0.0",
+  "description": "NPR JSON Schemas for validation and dev tooling",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "require": "./index.js",
+      "types": "./index.d.ts"
+    },
+    "./schemas/*": "./schemas/*"
+  },
+  "files": [
+    "schemas",
+    "index.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "validate": "node scripts/validate-schemas.js",
+    "validate:python": "python scripts/validate_schemas.py --all",
+    "validate:all": "npm run validate && npm run validate:python"
+  },
+  "dependencies": {
+    "ajv": "^8.12.0",
+    "ajv-formats": "^2.1.1",
+    "ajv-draft-04": "^1.0.0"
+  },
+  "keywords": ["npr", "rag", "json-schema", "validation"],
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,214 @@
+{
+  "description": "Golden questions for 2025 Ziebart FDD document evaluation",
+  "pdf_path": "C:/Apps/rag/2025 FDD.pdf",
+  "doc_id": "eea5a7954ff397d8db1cafc9aeb19f21",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the initial franchise fee for a Ziebart franchise?",
+      "category": "initial_fees",
+      "expected_evidence": [
+        {"page_no": 14, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["$45,000", "initial", "franchise fee"],
+      "expected_answer_contains": "45,000"
+    },
+    {
+      "id": "q2", 
+      "question": "What is the royalty percentage that franchisees must pay?",
+      "category": "ongoing_fees",
+      "expected_evidence": [
+        {"page_no": 16, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["8%", "royalty", "gross sales"],
+      "expected_answer_contains": "8%"
+    },
+    {
+      "id": "q3",
+      "question": "What is the minimum weekly royalty amount?",
+      "category": "ongoing_fees",
+      "expected_evidence": [
+        {"page_no": 16, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["$650", "minimum", "weekly"],
+      "expected_answer_contains": "650"
+    },
+    {
+      "id": "q4",
+      "question": "What services does a Ziebart franchise offer?",
+      "category": "business_overview",
+      "expected_evidence": [
+        {"page_no": 9, "node_type": "chunk"},
+        {"page_no": 10, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["protection", "detailing", "window tint", "accessories", "rustproofing"],
+      "expected_answer_contains": "protection"
+    },
+    {
+      "id": "q5",
+      "question": "Who is the Chairman of the Board of Ziebart International Corporation?",
+      "category": "business_experience",
+      "expected_evidence": [
+        {"page_no": 11, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["Thomas E. Wolfe", "Chairman"],
+      "expected_answer_contains": "Wolfe"
+    },
+    {
+      "id": "q6",
+      "question": "What is the estimated initial investment range for a Ziebart franchise?",
+      "category": "initial_investment",
+      "expected_evidence": [
+        {"page_no": 22, "node_type": "chunk"},
+        {"page_no": 23, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["initial investment", "estimated"],
+      "expected_answer_contains": ["low", "high"]
+    },
+    {
+      "id": "q7",
+      "question": "What is the Multi-Unit Development Fee?",
+      "category": "multi_unit",
+      "expected_evidence": [
+        {"page_no": 23, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["$90,000", "multi-unit", "development"],
+      "expected_answer_contains": "90,000"
+    },
+    {
+      "id": "q8",
+      "question": "What trademarks does Ziebart own? List at least 5.",
+      "category": "trademarks",
+      "expected_evidence": [
+        {"page_no": 50, "node_type": "chunk"},
+        {"page_no": 51, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["ZIEBART", "Z-LINER", "TIDY CAR", "DIAMOND GLOSS", "trademark"],
+      "expected_answer_contains": "ZIEBART"
+    },
+    {
+      "id": "q9",
+      "question": "What happens to the franchise upon termination according to the agreement?",
+      "category": "termination",
+      "expected_evidence": [
+        {"page_no": 101, "node_type": "chunk"},
+        {"page_no": 102, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["cease", "trademark", "termination"],
+      "expected_answer_contains": "cease"
+    },
+    {
+      "id": "q10",
+      "question": "What is the address of Ziebart Corporation headquarters?",
+      "category": "company_info",
+      "expected_evidence": [
+        {"page_no": 1, "node_type": "chunk"},
+        {"page_no": 8, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["1290 E. Maple Road", "Troy", "Michigan", "48083"],
+      "expected_answer_contains": "Troy"
+    },
+    {
+      "id": "q11",
+      "question": "What is the opening inventory cost range for a Ziebart franchise?",
+      "category": "initial_costs",
+      "expected_evidence": [
+        {"page_no": 15, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["$32,000", "$50,000", "inventory"],
+      "expected_answer_contains": ["32,000", "50,000"]
+    },
+    {
+      "id": "q12",
+      "question": "Are there any special provisions for Veterans?",
+      "category": "veteran_discount",
+      "expected_evidence": [
+        {"page_no": 15, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["veteran", "discount", "development fee"],
+      "expected_answer_contains": "veteran"
+    },
+    {
+      "id": "q13",
+      "question": "What is required regarding the warranty program and NALF?",
+      "category": "warranty",
+      "expected_evidence": [
+        {"page_no": 17, "node_type": "chunk"},
+        {"page_no": 20, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["NALF", "warranty", "North American Liability Fund"],
+      "expected_answer_contains": "NALF"
+    },
+    {
+      "id": "q14",
+      "question": "What are the Michigan state-specific disclosure requirements?",
+      "category": "state_specific",
+      "expected_evidence": [
+        {"page_no": 5, "node_type": "chunk"},
+        {"page_no": 6, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["Michigan", "unfair provisions", "prohibition"],
+      "expected_answer_contains": "Michigan"
+    },
+    {
+      "id": "q15",
+      "question": "Is there any pending litigation disclosed?",
+      "category": "litigation",
+      "expected_evidence": [
+        {"page_no": 13, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["litigation", "no litigation", "disclosed"],
+      "expected_answer_contains": "no"
+    },
+    {
+      "id": "q16",
+      "question": "What is the training cancellation fee?",
+      "category": "fees",
+      "expected_evidence": [
+        {"page_no": 18, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["$100", "training", "cancellation"],
+      "expected_answer_contains": "100"
+    },
+    {
+      "id": "q17",
+      "question": "Who is the Vice President of Information Technology at Ziebart?",
+      "category": "business_experience",
+      "expected_evidence": [
+        {"page_no": 12, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["Larry Stewart", "Information Technology", "Vice President"],
+      "expected_answer_contains": "Stewart"
+    },
+    {
+      "id": "q18",
+      "question": "What is the Rhino Linings relationship with Ziebart?",
+      "category": "trademarks",
+      "expected_evidence": [
+        {"page_no": 53, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["Rhino", "development agreement", "sublicense"],
+      "expected_answer_contains": "Rhino"
+    },
+    {
+      "id": "q19",
+      "question": "What are the provisions for Washington state franchisees?",
+      "category": "state_specific",
+      "expected_evidence": [
+        {"page_no": 201, "node_type": "chunk"}
+      ],
+      "expected_keywords": ["Washington", "RCW", "Franchise Investment Protection"],
+      "expected_answer_contains": "Washington"
+    },
+    {
+      "id": "q20",
+      "question": "What is the environmental compliance policy for Ziebart franchises?",
+      "category": "abstention",
+      "expected_evidence": [],
+      "expected_keywords": [],
+      "expected_answer_contains": "not",
+      "should_abstain": true,
+      "abstain_reason": "Environmental compliance policy details are not specified in this FDD"
+    }
+  ]
+}

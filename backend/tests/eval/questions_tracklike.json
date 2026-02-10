@@ -1,0 +1,62 @@
+{
+  "description": "TRACK-like multi-hop and conflict questions for testing propagation_safety mode",
+  "pdf_path": "tests/docs/2404.08865v1.pdf",
+  "questions": [
+    {
+      "id": "track_01",
+      "question": "What is the main finding about model performance and how does this compare to the lost-in-the-middle phenomenon?",
+      "type": "multi_hop",
+      "expected_behavior": "synthesis",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 1},
+        {"node_type": "chunk", "page_no": 2}
+      ],
+      "expected_keywords": ["lost in the middle", "performance", "position"]
+    },
+    {
+      "id": "track_02",
+      "question": "Explain the key-value retrieval task and describe how model performance varied with context length.",
+      "type": "multi_hop",
+      "expected_behavior": "synthesis",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 5},
+        {"node_type": "chunk", "page_no": 6}
+      ],
+      "expected_keywords": ["key-value", "retrieval", "context length"]
+    },
+    {
+      "id": "track_03",
+      "question": "Based on the multi-document QA results, what recommendations do the authors make for RAG systems?",
+      "type": "multi_hop",
+      "expected_behavior": "synthesis",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 4},
+        {"node_type": "chunk", "page_no": 7}
+      ],
+      "expected_keywords": ["RAG", "retrieval", "recommendation"]
+    },
+    {
+      "id": "track_04",
+      "question": "What is the paper's methodology for testing needle position effects and what does Figure 1 show about this?",
+      "type": "multi_hop_figure",
+      "expected_behavior": "synthesis",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 3},
+        {"label": "Figure 1"}
+      ],
+      "expected_keywords": ["needle", "position", "methodology"]
+    },
+    {
+      "id": "track_05",
+      "question": "Compare the performance of GPT-3.5 and Claude models in the experiments. Which performed better overall?",
+      "type": "multi_hop_comparison",
+      "expected_behavior": "synthesis",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 3},
+        {"node_type": "chunk", "page_no": 4}
+      ],
+      "expected_keywords": ["GPT", "Claude", "performance", "accuracy"],
+      "must_mention_conflict": false
+    }
+  ]
+}

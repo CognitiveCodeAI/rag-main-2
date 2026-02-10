@@ -1,0 +1,44 @@
+{
+  "version": "v1",
+  "description": "Controlled synonym mapping for query normalization. Do not remove original terms; only expand.",
+  "rules": {
+    "key-value retrieval": ["needle-in-a-haystack", "in-context recall", "factoid retrieval"],
+    "key value retrieval": ["needle-in-a-haystack", "in-context recall", "factoid retrieval"],
+    "dataset": ["tests", "factoid question pairs", "Paul Graham essays", "haystack"],
+    "datasets": ["tests", "factoid question pairs", "Paul Graham Essays", "Table 2"],
+    "datasets used": ["Table 2", "factoid/question pairs", "Paul Graham Essays", "haystack construction"],
+    "recommendations": ["Conclusion", "Section 6", "future research", "Discussion", "implications"],
+    "future work": ["Conclusion", "implications", "Section 6", "future research"],
+    "implications": ["Conclusion", "Discussion", "practical implications"],
+    "evaluation criteria": ["scoring scale", "Table 4", "1-5 scale", "judge", "rubric"],
+    "scoring": ["Table 4", "rubric", "Appendix C", "1-5 scale"],
+    "scoring criteria": ["Table 4", "rubric", "Appendix C", "judge"],
+    "prompt format": ["prompt templates", "Appendix A", "Table 6"],
+    "prompt template": ["Appendix A", "Table 6", "prompt structure"],
+    "methodology": ["Section 3", "method", "experimental setup"],
+    "experimental setup": ["methodology", "Section 3", "distributions"],
+    "context window": ["context length", "tokens", "context size"],
+    "performance": ["accuracy", "recall", "results"]
+  },
+  "section_hints": {
+    "conclusion": ["recommendations", "future work", "implications", "conclusion", "takeaway", "summary", "main findings"],
+    "methodology": ["method", "haystack", "prompt structure", "distributions", "sigmoid", "linear", "experimental", "setup"],
+    "evaluation": ["scoring", "judge", "criteria", "scale", "rubric", "grading", "rating"],
+    "appendix": ["prompt template", "appendix", "llama template", "mistral template", "Table 6"]
+  },
+  "preserve_patterns": [
+    "GPT-\\d+(\\.\\d+)?",
+    "GPT \\d+",
+    "Llama \\d+",
+    "Llama2",
+    "Mistral",
+    "Mixtral",
+    "Claude",
+    "Table \\d+",
+    "Figure \\d+",
+    "Section \\d+",
+    "Appendix [A-Z]",
+    "\"[^\"]+\""
+  ],
+  "max_expansions": 6
+}

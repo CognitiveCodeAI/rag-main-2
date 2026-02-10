@@ -1,0 +1,591 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://npr-rag.local/schemas/retrieval-plan.v1.schema.json",
+    "title": "NPR RetrievalPlan DSL",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "request_id",
+      "decision",
+      "plan"
+    ],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "const": "1.0"
+      },
+      "request_id": {
+        "type": "string",
+        "minLength": 1
+      },
+      "decision": {
+        "type": "string",
+        "enum": ["PROCEED", "ASK_CLARIFYING"]
+      },
+      "clarifying_questions": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "maxItems": 3,
+        "default": []
+      },
+      "plan": { "$ref": "#/$defs/Plan" }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": { "decision": { "const": "ASK_CLARIFYING" } },
+          "required": ["decision"]
+        },
+        "then": {
+          "properties": {
+            "clarifying_questions": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": { "decision": { "const": "PROCEED" } },
+          "required": ["decision"]
+        },
+        "then": {
+          "properties": {
+            "clarifying_questions": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        }
+      }
+    ],
+    "$defs": {
+      "Plan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query_interpretation",
+          "retrieval_steps",
+          "fusion",
+          "rerank",
+          "evidence_budget",
+          "stop_conditions"
+        ],
+        "properties": {
+          "query_interpretation": { "$ref": "#/$defs/QueryInterpretation" },
+          "rewrite": { "$ref": "#/$defs/Rewrite" },
+          "retrieval_steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": { "$ref": "#/$defs/RetrievalStep" }
+          },
+          "fusion": { "$ref": "#/$defs/Fusion" },
+          "rerank": { "$ref": "#/$defs/Rerank" },
+          "diversity": { "$ref": "#/$defs/Diversity" },
+          "evidence_budget": { "$ref": "#/$defs/EvidenceBudget" },
+          "corrective_loop": { "$ref": "#/$defs/CorrectiveLoop" },
+          "stop_conditions": { "$ref": "#/$defs/StopConditions" },
+          "debug": { "$ref": "#/$defs/Debug" }
+        }
+      },
+  
+      "QueryInterpretation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entities",
+          "time_range",
+          "product",
+          "version",
+          "environment",
+          "doc_types",
+          "language"
+        ],
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/EntityRef" },
+            "default": []
+          },
+          "time_range": { "$ref": "#/$defs/TimeRange" },
+          "product": { "type": ["string", "null"] },
+          "component": { "type": ["string", "null"] },
+          "version": { "type": ["string", "null"] },
+          "environment": {
+            "type": ["string", "null"],
+            "description": "e.g., prod|staging|dev or org-defined",
+            "minLength": 1
+          },
+          "doc_types": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/DocType" },
+            "default": []
+          },
+          "language": { "type": ["string", "null"], "description": "BCP-47 if known" },
+          "ambiguity_signals": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/AmbiguitySignal" },
+            "default": []
+          }
+        }
+      },
+  
+      "Rewrite": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["NONE", "NORMALIZE", "EXPAND", "DECOMPOSE"]
+          },
+          "rewritten_queries": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "maxItems": 5
+          },
+          "notes": { "type": ["string", "null"] }
+        }
+      },
+  
+      "RetrievalStep": {
+        "oneOf": [
+          { "$ref": "#/$defs/SparseStep" },
+          { "$ref": "#/$defs/DenseStep" },
+          { "$ref": "#/$defs/NeuralSparseStep" },
+          { "$ref": "#/$defs/LateInteractionStep" },
+          { "$ref": "#/$defs/GraphStep" },
+          { "$ref": "#/$defs/SQLStep" },
+          { "$ref": "#/$defs/MultimodalStep" },
+          { "$ref": "#/$defs/PRFStep" }
+        ]
+      },
+  
+      "BaseStep": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "retriever", "top_k", "filters", "budgets"],
+        "properties": {
+          "step_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+          "retriever": { "type": "string" },
+          "top_k": { "type": "integer", "minimum": 1, "maximum": 1000 },
+          "filters": { "$ref": "#/$defs/Filters" },
+          "budgets": { "$ref": "#/$defs/StepBudgets" },
+          "priority": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 },
+          "notes": { "type": ["string", "null"] }
+        }
+      },
+  
+      "SparseStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "query", "fields"],
+            "properties": {
+              "retriever": { "const": "sparse" },
+              "query": { "type": "string", "minLength": 1 },
+              "fields": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["body", "title", "heading", "entities"],
+                "properties": {
+                  "body": { "type": "number", "minimum": 0, "maximum": 10, "default": 1.0 },
+                  "title": { "type": "number", "minimum": 0, "maximum": 10, "default": 2.0 },
+                  "heading": { "type": "number", "minimum": 0, "maximum": 10, "default": 1.5 },
+                  "entities": { "type": "number", "minimum": 0, "maximum": 10, "default": 1.0 }
+                }
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["BM25", "BM25F", "PHRASE", "PROXIMITY"],
+                "default": "BM25"
+              }
+            }
+          }
+        ]
+      },
+  
+      "DenseStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "query", "embedding_view"],
+            "properties": {
+              "retriever": { "const": "dense" },
+              "query": { "type": "string", "minLength": 1 },
+              "embedding_view": {
+                "type": "string",
+                "enum": ["vec_content", "vec_contextual", "vec_title_heading", "vec_entities", "vec_doc_summary"]
+              },
+              "ann": { "$ref": "#/$defs/ANNConfig" }
+            }
+          }
+        ]
+      },
+  
+      "NeuralSparseStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "query", "model_id"],
+            "properties": {
+              "retriever": { "const": "neural_sparse" },
+              "query": { "type": "string", "minLength": 1 },
+              "model_id": { "type": "string", "minLength": 1 },
+              "mode": { "type": "string", "enum": ["SPLADE", "OTHER"], "default": "SPLADE" }
+            }
+          }
+        ]
+      },
+  
+      "LateInteractionStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "query", "model_id", "candidate_source_step_ids"],
+            "properties": {
+              "retriever": { "const": "late_interaction" },
+              "query": { "type": "string", "minLength": 1 },
+              "model_id": { "type": "string", "minLength": 1 },
+              "candidate_source_step_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" }
+              },
+              "re_score_top_n": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 }
+            }
+          }
+        ]
+      },
+  
+      "GraphStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "seed_entities", "max_hops", "edge_types"],
+            "properties": {
+              "retriever": { "const": "graph" },
+              "seed_entities": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "$ref": "#/$defs/EntityRef" }
+              },
+              "max_hops": { "type": "integer", "minimum": 1, "maximum": 5 },
+              "edge_types": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": ["mentions", "cites", "supersedes", "duplicates", "contradicts", "derived_from", "same_topic", "part_of", "owned_by", "relates_to", "same_as"]
+                }
+              },
+              "expansion": {
+                "type": "string",
+                "enum": ["BFS", "WEIGHTED", "PAGERANK_SEED"],
+                "default": "WEIGHTED"
+              }
+            }
+          }
+        ]
+      },
+  
+      "SQLStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "query_template_id", "params"],
+            "properties": {
+              "retriever": { "const": "sql" },
+              "query_template_id": { "type": "string", "minLength": 1 },
+              "params": {
+                "type": "object",
+                "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+              },
+              "result_to_evidence": {
+                "type": "string",
+                "enum": ["ROW_AS_EVIDENCE", "ROW_TO_TEXT_SPANS"],
+                "default": "ROW_TO_TEXT_SPANS"
+              }
+            }
+          }
+        ]
+      },
+  
+      "MultimodalStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "query", "modalities"],
+            "properties": {
+              "retriever": { "const": "multimodal" },
+              "query": { "type": "string", "minLength": 1 },
+              "modalities": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "enum": ["text", "image_region", "table", "figure"] }
+              },
+              "region_strategy": {
+                "type": "string",
+                "enum": ["PAGE_LEVEL", "REGION_LEVEL", "HYBRID"],
+                "default": "HYBRID"
+              }
+            }
+          }
+        ]
+      },
+  
+      "PRFStep": {
+        "allOf": [
+          { "$ref": "#/$defs/BaseStep" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["retriever", "source_step_id", "method"],
+            "properties": {
+              "retriever": { "const": "prf" },
+              "source_step_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+              "method": { "type": "string", "enum": ["RM3", "ROCCHIO", "OTHER"], "default": "RM3" },
+              "expand_terms": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
+            }
+          }
+        ]
+      },
+  
+      "Fusion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["method"],
+        "properties": {
+          "method": { "type": "string", "enum": ["rrf", "weighted_sum", "ltr_fusion"] },
+          "rrf_k": { "type": "integer", "minimum": 1, "maximum": 200, "default": 60 },
+          "weights": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sparse": { "type": "number", "minimum": 0, "maximum": 10 },
+              "dense": { "type": "number", "minimum": 0, "maximum": 10 },
+              "neural_sparse": { "type": "number", "minimum": 0, "maximum": 10 },
+              "late_interaction": { "type": "number", "minimum": 0, "maximum": 10 },
+              "graph": { "type": "number", "minimum": 0, "maximum": 10 },
+              "sql": { "type": "number", "minimum": 0, "maximum": 10 },
+              "multimodal": { "type": "number", "minimum": 0, "maximum": 10 }
+            }
+          }
+        }
+      },
+  
+      "Rerank": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["method", "top_n"],
+        "properties": {
+          "method": { "type": "string", "enum": ["none", "cross_encoder", "llm_reranker", "ltr"] },
+          "model_id": { "type": ["string", "null"] },
+          "top_n": { "type": "integer", "minimum": 1, "maximum": 500 },
+          "batch_size": { "type": "integer", "minimum": 1, "maximum": 256, "default": 32 }
+        }
+      },
+  
+      "Diversity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "max_per_doc": { "type": "integer", "minimum": 1, "maximum": 50, "default": 6 },
+          "max_per_section": { "type": "integer", "minimum": 1, "maximum": 50, "default": 3 },
+          "min_unique_docs": { "type": "integer", "minimum": 1, "maximum": 100, "default": 3 }
+        }
+      },
+  
+      "EvidenceBudget": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["max_items", "max_tokens", "compression_mode", "max_spans_per_chunk"],
+        "properties": {
+          "max_items": { "type": "integer", "minimum": 1, "maximum": 50 },
+          "max_tokens": { "type": "integer", "minimum": 256, "maximum": 20000 },
+          "compression_mode": { "type": "string", "enum": ["extractive", "extractive_then_optional_summary"] },
+          "max_spans_per_chunk": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 }
+        }
+      },
+  
+      "CorrectiveLoop": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "max_iterations": { "type": "integer", "minimum": 0, "maximum": 5, "default": 2 },
+          "allowed_repairs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "add_sparse_phrase_query",
+                "increase_top_k",
+                "tighten_filters",
+                "relax_filters",
+                "graph_expand",
+                "invoke_late_interaction",
+                "invoke_neural_sparse",
+                "invoke_multimodal",
+                "apply_prf",
+                "rewrite_query"
+              ]
+            },
+            "default": [
+              "add_sparse_phrase_query",
+              "increase_top_k",
+              "graph_expand",
+              "invoke_late_interaction",
+              "rewrite_query"
+            ]
+          }
+        }
+      },
+  
+      "StopConditions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["max_latency_ms", "max_cost_units", "max_total_candidates"],
+        "properties": {
+          "max_latency_ms": { "type": "integer", "minimum": 100, "maximum": 600000 },
+          "max_cost_units": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Abstract cost budget units (e.g., normalized $ or token-cost units)"
+          },
+          "max_total_candidates": { "type": "integer", "minimum": 10, "maximum": 50000 }
+        }
+      },
+  
+      "Filters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_type": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/DocType" },
+            "default": []
+          },
+          "product": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "component": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "team": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "environment": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "language": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "authority_tier": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["TIER_1", "TIER_2", "TIER_3"] },
+            "default": []
+          },
+          "time_range": { "$ref": "#/$defs/TimeRange" },
+          "version_tags": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "acl_labels": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "exclude_injection_risk_gte": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "default": null
+          },
+          "require_corroboration_if_injection_risk_gte": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1,
+            "default": null
+          }
+        }
+      },
+  
+      "StepBudgets": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["max_latency_ms", "max_cost_units"],
+        "properties": {
+          "max_latency_ms": { "type": "integer", "minimum": 10, "maximum": 600000 },
+          "max_cost_units": { "type": "number", "minimum": 0 }
+        }
+      },
+  
+      "ANNConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "index_type": { "type": "string", "enum": ["HNSW", "IVF", "PQ", "OTHER"], "default": "HNSW" },
+          "ef_search": { "type": ["integer", "null"], "minimum": 1, "maximum": 10000, "default": null },
+          "nprobe": { "type": ["integer", "null"], "minimum": 1, "maximum": 4096, "default": null },
+          "require_ann_recall_gate": { "type": "boolean", "default": true }
+        }
+      },
+  
+      "TimeRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end"],
+        "properties": {
+          "start": { "type": ["string", "null"], "format": "date-time" },
+          "end": { "type": ["string", "null"], "format": "date-time" }
+        }
+      },
+  
+      "EntityRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "name", "id", "confidence"],
+        "properties": {
+          "type": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "id": { "type": ["string", "null"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      },
+  
+      "DocType": {
+        "type": "string",
+        "enum": ["policy", "spec", "runbook", "ticket", "email", "other"]
+      },
+  
+      "AmbiguitySignal": {
+        "type": "string",
+        "enum": [
+          "missing_time_range",
+          "missing_product",
+          "missing_version",
+          "multiple_products_detected",
+          "multiple_versions_detected",
+          "multiple_environments_detected",
+          "identifier_typo_suspected",
+          "underspecified_intent",
+          "conflict_likely"
+        ]
+      },
+  
+      "Debug": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "planner_model_id": { "type": ["string", "null"] },
+          "planner_temperature": { "type": ["number", "null"], "minimum": 0, "maximum": 2 },
+          "meta_snapshot_id": { "type": ["string", "null"] },
+          "notes": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+  

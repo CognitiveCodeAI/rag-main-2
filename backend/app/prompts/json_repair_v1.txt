@@ -1,0 +1,14 @@
+The following JSON is malformed. Fix it and return ONLY valid JSON.
+
+RULES:
+- Fix syntax errors (missing quotes, brackets, commas)
+- Preserve all data from the original
+- Do NOT add new fields
+- Do NOT change values unless necessary for valid JSON
+- Output ONLY the corrected JSON, nothing else
+
+EXPECTED SCHEMA:
+{schema}
+
+MALFORMED JSON:
+{raw_json}

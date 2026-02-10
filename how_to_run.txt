@@ -1,0 +1,109 @@
+====================================
+NPR RAG Application - How to Run
+====================================
+
+PREREQUISITES:
+- Python 3.11+
+- Node.js 18+
+- Infrastructure running (Docker locally, or remote server)
+- OpenAI API key configured in backend\.env
+
+INFRASTRUCTURE OPTIONS:
+1. Reuse existing Docker services (recommended when ai-* is already running):
+   Configure DB_HOST, MILVUS_HOST, MINIO_ENDPOINT, REDIS_URL, etc. in backend\.env
+2. Local Docker for this repo: Run `docker compose up -d` first
+3. Remote server: Configure DB_HOST, MILVUS_HOST, etc. in backend\.env
+
+====================================
+SINGLE COMMAND (Recommended)
+====================================
+
+    python run.py
+
+This starts ALL three services:
+  - Backend API (port 8000)
+  - Celery worker (background task processing)
+  - Frontend (port 3000)
+
+It also verifies prerequisites, waits for the backend to be ready,
+and checks infrastructure health (PostgreSQL, Milvus, MinIO, Redis).
+
+Press Ctrl+C to stop all services.
+
+Options:
+    python run.py --no-celery   # Skip Celery worker
+
+====================================
+MANUAL START (3 Terminals)
+====================================
+
+TERMINAL 1 - Backend API:
+    cd backend
+    .\venv\Scripts\activate        (Windows)
+    source venv/bin/activate       (Linux/macOS)
+    uvicorn main:app --host 0.0.0.0 --port 8000
+
+TERMINAL 2 - Celery Worker:
+    cd backend
+    .\venv\Scripts\activate        (Windows)
+    source venv/bin/activate       (Linux/macOS)
+    celery -A app.worker worker --loglevel=info --pool=solo
+
+    NOTE: --pool=solo is REQUIRED on Windows.
+    The Celery worker reads REDIS_URL and REDIS_BACKEND from
+    environment variables. If your Redis is not on localhost,
+    set these before running:
+        set REDIS_URL=redis://your-host:6379/0
+        set REDIS_BACKEND=redis://your-host:6379/1
+
+TERMINAL 3 - Frontend:
+    cd frontend
+    npm run dev
+
+====================================
+ACCESS URLS
+====================================
+
+- Frontend:       http://localhost:3000
+- Backend API:    http://localhost:8000
+- API Docs:       http://localhost:8000/docs
+- Health Check:   http://localhost:8000/health?check_services=true
+
+====================================
+FIRST TIME SETUP (One-Time Only)
+====================================
+
+1. SETUP BACKEND:
+   cd backend
+   python -m venv venv
+   .\venv\Scripts\activate        (Windows)
+   source venv/bin/activate       (Linux/macOS)
+   pip install -r requirements.txt
+   copy .env.example .env         (Windows)
+   cp .env.example .env           (Linux/macOS)
+   (Edit .env with your OPENAI_API_KEY and database credentials)
+
+2. SETUP FRONTEND:
+   cd frontend
+   npm install
+
+3. INITIALIZE DATABASE (if needed):
+   cd backend
+   .\venv\Scripts\activate        (Windows)
+   source venv/bin/activate       (Linux/macOS)
+   python -m scripts.setup.setup_all
+
+====================================
+HEALTH CHECK
+====================================
+
+- Basic:    http://localhost:8000/health
+- Full:     http://localhost:8000/health?check_services=true
+  Returns status for PostgreSQL, Milvus, MinIO, and Redis.
+
+====================================
+STOP SERVICES
+====================================
+
+If using run.py: Press Ctrl+C (stops everything)
+If using manual start: Press Ctrl+C in each terminal window.

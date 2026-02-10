@@ -1,0 +1,84 @@
+{
+  "description": "Evaluation fixtures for Graph RAG testing",
+  "version": "1.0",
+  "fixtures": [
+    {
+      "id": "fig_reference_basic",
+      "description": "Basic figure reference in text - 'see Figure 1'",
+      "file": "fig_reference_basic.txt",
+      "expected_behaviors": [
+        "Creates chunk node with reference detection",
+        "Creates figure node with label 'Figure 1'",
+        "Creates 'references' edge from chunk to figure"
+      ],
+      "queries": [
+        {
+          "query": "What does Figure 1 show?",
+          "expected_evidence": ["figure_1", "chunk_referencing_fig1"]
+        }
+      ]
+    },
+    {
+      "id": "table_with_caption",
+      "description": "Table with caption and subsequent reference",
+      "file": "table_with_caption.txt",
+      "expected_behaviors": [
+        "Creates table node with label 'Table 2'",
+        "Creates chunk that explains the table",
+        "Creates 'explained_by' edge from table to chunk"
+      ],
+      "queries": [
+        {
+          "query": "What data is in Table 2?",
+          "expected_evidence": ["table_2", "chunk_explaining_table"]
+        }
+      ]
+    },
+    {
+      "id": "cross_page_reference",
+      "description": "Figure on page 1, referenced on page 3",
+      "file": "cross_page_reference.txt",
+      "expected_behaviors": [
+        "Figure node on page 1",
+        "Chunk node on page 3 with reference",
+        "Reference edge spans pages"
+      ],
+      "queries": [
+        {
+          "query": "What does Figure 3.1 show about quarterly results?",
+          "expected_evidence": ["figure_3_1", "page3_analysis_chunk"]
+        }
+      ]
+    },
+    {
+      "id": "adjacent_context",
+      "description": "Important context in adjacent chunks",
+      "file": "adjacent_context.txt",
+      "expected_behaviors": [
+        "Adjacent chunks linked correctly",
+        "Expansion includes prev/next chunks"
+      ],
+      "queries": [
+        {
+          "query": "What is the methodology?",
+          "expected_evidence": ["methodology_chunk", "prev_chunk_context", "next_chunk_context"]
+        }
+      ]
+    },
+    {
+      "id": "figure_explains_data",
+      "description": "Figure with explicit 'shows' explanation",
+      "file": "figure_explains_data.txt",
+      "expected_behaviors": [
+        "High-confidence explained_by edge",
+        "Chunk contains 'Figure X shows'"
+      ],
+      "queries": [
+        {
+          "query": "What trend is shown in the data?",
+          "expected_evidence": ["figure_trend", "explanation_chunk"]
+        }
+      ]
+    }
+  ]
+}

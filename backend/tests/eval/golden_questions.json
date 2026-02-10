@@ -1,0 +1,105 @@
+{
+  "description": "Golden question set for evaluating RAG on 2404.08865v1.pdf (Lost in the Middle paper)",
+  "pdf_path": "tests/docs/2404.08865v1.pdf",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the main claim of this paper regarding language model performance?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 1},
+        {"node_type": "chunk", "page_no": 2}
+      ],
+      "expected_keywords": ["lost in the middle", "in-context", "relevant information", "long input context"],
+      "expected_figures": []
+    },
+    {
+      "id": "q2",
+      "question": "What is the 'lost in the middle' phenomenon?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 1}
+      ],
+      "expected_keywords": ["beginning", "end", "middle", "performance", "degraded"],
+      "expected_figures": []
+    },
+    {
+      "id": "q3",
+      "question": "What models were evaluated in this study and what are their context lengths?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 3},
+        {"node_type": "chunk", "page_no": 4}
+      ],
+      "expected_keywords": ["GPT-3.5", "Claude", "context", "tokens"],
+      "expected_figures": []
+    },
+    {
+      "id": "q4",
+      "question": "What does Figure 1 show about model performance?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 3}
+      ],
+      "expected_keywords": ["performance", "position", "relevant"],
+      "expected_figures": ["Figure 1"],
+      "notes": "This question specifically tests figure-to-chunk linkage"
+    },
+    {
+      "id": "q5",
+      "question": "How does the position of relevant information affect accuracy in the multi-document QA task?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 4},
+        {"node_type": "chunk", "page_no": 5}
+      ],
+      "expected_keywords": ["accuracy", "position", "documents", "beginning", "end"],
+      "expected_figures": []
+    },
+    {
+      "id": "q6",
+      "question": "What datasets were used to evaluate the models?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 3}
+      ],
+      "expected_keywords": ["NaturalQuestions", "dataset", "documents"],
+      "expected_figures": []
+    },
+    {
+      "id": "q7",
+      "question": "According to Table 1 or Table 2, which model performed best overall?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 5},
+        {"node_type": "chunk", "page_no": 6}
+      ],
+      "expected_keywords": ["performance", "accuracy"],
+      "expected_figures": ["Table 1", "Table 2"],
+      "notes": "This question specifically tests table-to-chunk linkage"
+    },
+    {
+      "id": "q8",
+      "question": "What are the practical implications of this research for RAG systems?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 7},
+        {"node_type": "chunk", "page_no": 8}
+      ],
+      "expected_keywords": ["retrieval", "RAG", "practical", "implications"],
+      "expected_figures": []
+    },
+    {
+      "id": "q9",
+      "question": "What is the key-value retrieval task and why was it used?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 5},
+        {"node_type": "chunk", "page_no": 6}
+      ],
+      "expected_keywords": ["key-value", "synthetic", "retrieval"],
+      "expected_figures": []
+    },
+    {
+      "id": "q10",
+      "question": "What recommendations do the authors make for future work or system design?",
+      "expected_evidence": [
+        {"node_type": "chunk", "page_no": 8},
+        {"node_type": "chunk", "page_no": 9}
+      ],
+      "expected_keywords": ["future", "recommendation", "design"],
+      "expected_figures": []
+    }
+  ]
+}
