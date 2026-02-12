@@ -46,17 +46,20 @@ NPR (Near-Perfect RAG) is a production-grade Retrieval-Augmented Generation syst
 ```bash
 docker-compose up -d          # Start PostgreSQL, Milvus, MinIO, Redis
 docker-compose down           # Stop all infrastructure
+docker-compose down -v        # Stop and delete all data (full reset)
 ```
 
 ### Backend
 ```bash
 cd backend
-.\venv\Scripts\activate                                          # Activate venv (Windows)
-uvicorn main:app --reload --host 0.0.0.0 --port 8000             # Dev server
+.\venv\Scripts\activate                                           # Activate venv (Windows)
+source venv/bin/activate                                          # Activate venv (Linux/macOS)
+uvicorn main:app --reload --host 0.0.0.0 --port 8000              # Dev server
 celery -A app.worker worker --loglevel=info --pool=solo           # Celery worker (--pool=solo required on Windows)
 python -m scripts.setup.setup_all                                 # Initialize DBs (first time)
 pytest                                                            # Run all tests
 pytest tests/qa/ -v                                               # QA tests only
+pytest tests/test_routes.py::test_health -v                       # Run a single test
 pytest --cov=app tests/                                           # Tests with coverage
 ```
 
@@ -70,9 +73,17 @@ npm run lint      # ESLint
 
 ### All Services
 ```bash
-python run.py              # Start backend + Celery worker + frontend (Ctrl+C to stop)
-python run.py --no-celery  # Start without Celery worker
+python run.py                  # Start backend + Celery worker + frontend (Ctrl+C to stop)
+python run.py --no-celery      # Start without Celery worker
+python run.py --force-cleanup  # Kill existing processes on ports 3000/8000 first
 ```
+
+### First-Time Setup
+```bash
+.\setup.ps1                    # Windows (PowerShell)
+./setup.sh                     # Linux/macOS
+```
+The setup scripts handle Docker containers, Python venv, Node dependencies, database migrations, and connection verification.
 
 ## Configuration
 
@@ -98,3 +109,4 @@ All backend routes are prefixed with `/v1/`:
 - **OCR fallback**: Pages with low text-quality scores (< 0.3 threshold) automatically fall back to Ollama-based OCR
 - **Versioned prompts**: Prompt templates in `backend/app/prompts/` use `_v1`/`_v2` suffixes for iteration without breaking existing behavior
 - **Two MinIO instances in docker-compose**: One for Milvus internal storage (port 9010), one for application document storage (port 9000)
+- **Docling backend (optional)**: Enable `DOCLING_ENABLED_DEFAULT=true` in `.env` to use Docling for multi-format document conversion (PDF, DOCX, PPTX, XLSX). Requires `pip install docling>=2.72.0`
