@@ -8,15 +8,13 @@ This test validates:
 5. Re-ingestion is idempotent
 
 Prerequisites:
-- PostgreSQL running on 192.168.100.25:5433
-- MinIO running on 192.168.100.25:9000
-- Redis running on 192.168.100.25:6379 (for Celery)
+- Infrastructure running via docker-compose (PostgreSQL, MinIO, Redis, Milvus)
 - Celery worker running
 
 To run:
-    cd C:\\Apps\\rag\\backend
-    .\\venv\\Scripts\\activate
-    python tests\\test_ingestion_e2e.py
+    cd backend
+    source venv/bin/activate  # or .\\venv\\Scripts\\activate on Windows
+    python tests/test_ingestion_e2e.py
 """
 
 import os

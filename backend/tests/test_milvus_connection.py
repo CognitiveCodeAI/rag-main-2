@@ -1,11 +1,12 @@
 """Test Milvus connection."""
 
+import os
 from pymilvus import connections, utility, Collection, FieldSchema, CollectionSchema, DataType
 import numpy as np
 
-# Milvus configuration
-MILVUS_HOST = "192.168.100.25"
-MILVUS_PORT = 19530
+# Milvus configuration (from environment or defaults matching docker-compose)
+MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
+MILVUS_PORT = int(os.getenv("MILVUS_PORT", "19530"))
 MILVUS_ALIAS = "default"
 
 

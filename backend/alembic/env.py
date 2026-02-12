@@ -23,11 +23,12 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Database connection settings (from environment variables)
-DB_HOST = os.getenv("DB_HOST", "192.168.100.25")
-DB_PORT = os.getenv("DB_PORT", "5433")
-DB_NAME = os.getenv("DB_NAME", "appdb")
-DB_USER = os.getenv("DB_USER", "appuser")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "1Shot@OneKill")
+# Defaults match docker-compose.yml for local development
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "ragdb")
+DB_USER = os.getenv("DB_USER", "raguser")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "ragpass")
 
 # Build URL with URL-encoded password
 DATABASE_URL = os.getenv(

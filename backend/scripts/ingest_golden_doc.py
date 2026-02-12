@@ -84,7 +84,7 @@ def main():
     
     from pymilvus import connections, Collection, utility
     
-    host = os.getenv("MILVUS_HOST", "192.168.100.25")
+    host = os.getenv("MILVUS_HOST", "localhost")
     port = os.getenv("MILVUS_PORT", "19530")
     
     connections.connect(alias="verify", host=host, port=port, timeout=10)

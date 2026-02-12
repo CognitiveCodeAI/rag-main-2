@@ -53,7 +53,7 @@ print()
 
 # 4. Milvus collection info
 print('4. MILVUS COLLECTIONS')
-host = os.getenv('MILVUS_HOST', '192.168.100.25')
+host = os.getenv('MILVUS_HOST', 'localhost')
 port = os.getenv('MILVUS_PORT', '19530')
 connections.connect('diag', host=host, port=port)
 
