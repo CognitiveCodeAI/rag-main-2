@@ -277,8 +277,9 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 cd backend
 source venv/bin/activate
-celery -A app.worker worker --loglevel=info --pool=solo
+celery -A app.worker worker --loglevel=info --pool=prefork --concurrency=4
 ```
+On Windows, use `--pool=solo`.
 
 **Terminal 3 — Frontend:**
 ```bash

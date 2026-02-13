@@ -29,3 +29,17 @@ def test_inspect_celery_workers_reports_unhealthy_without_workers():
     assert status.healthy is False
     assert status.worker_count == 0
     assert "no celery workers" in status.message.lower()
+
+
+def test_inspect_celery_workers_uses_stats_fallback():
+    """Worker check should use stats fallback when ping has no response."""
+    inspect_mock = MagicMock()
+    inspect_mock.ping.return_value = {}
+    inspect_mock.stats.return_value = {"worker@localhost": {"pool": "prefork"}}
+
+    with patch("app.services.worker_health.celery_app.control.inspect", return_value=inspect_mock):
+        status = inspect_celery_workers(timeout=0.1)
+
+    assert status.healthy is True
+    assert status.worker_count == 1
+    assert "reachable via stats" in status.message.lower()

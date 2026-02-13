@@ -308,7 +308,8 @@ echo "    uvicorn main:app --reload --host 0.0.0.0 --port 8000"
 echo ""
 printf '\033[33m  Terminal 2 (Celery worker):\033[0m\n'
 echo "    cd backend && source venv/bin/activate"
-echo "    celery -A app.worker worker --loglevel=info --pool=solo"
+echo "    celery -A app.worker worker --loglevel=info --pool=prefork --concurrency=4"
+echo "    # On Windows use: --pool=solo"
 echo ""
 printf '\033[33m  Terminal 3 (Frontend):\033[0m\n'
 echo "    cd frontend && npm run dev"

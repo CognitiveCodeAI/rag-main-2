@@ -55,7 +55,7 @@ cd backend
 .\venv\Scripts\activate                                           # Activate venv (Windows)
 source venv/bin/activate                                          # Activate venv (Linux/macOS)
 uvicorn main:app --reload --host 0.0.0.0 --port 8000              # Dev server
-celery -A app.worker worker --loglevel=info --pool=solo           # Celery worker (--pool=solo required on Windows)
+celery -A app.worker worker --loglevel=info --pool=prefork --concurrency=4  # Linux/macOS Celery worker (Windows: --pool=solo)
 python -m scripts.setup.setup_all                                 # Initialize DBs (first time)
 pytest                                                            # Run all tests
 pytest tests/qa/ -v                                               # QA tests only

@@ -293,6 +293,31 @@ def monitor_services() -> None:
             start_service(svc)
 
 
+def build_celery_command() -> list[str]:
+    """Build a platform-appropriate Celery worker command.
+
+    Defaults:
+    - Windows: solo pool (process forking is unavailable)
+    - macOS/Linux: prefork pool (keeps control-plane ping responsive while tasks run)
+    """
+    base = (
+        [str(VENV_CELERY), "-A", "app.worker", "worker", "--loglevel=info"]
+        if VENV_CELERY.exists()
+        else [str(VENV_PYTHON), "-m", "celery", "-A", "app.worker", "worker", "--loglevel=info"]
+    )
+
+    pool = os.getenv("CELERY_POOL", "solo" if sys.platform == "win32" else "prefork")
+    cmd = [*base, "--pool", pool]
+
+    if pool != "solo":
+        # Keep default concurrency conservative for local laptops unless explicitly set.
+        default_concurrency = str(max(2, min(4, os.cpu_count() or 2)))
+        concurrency = os.getenv("CELERY_CONCURRENCY", default_concurrency)
+        cmd.extend(["--concurrency", concurrency])
+
+    return cmd
+
+
 def build_services(skip_celery: bool) -> list[ManagedService]:
     backend_env = load_backend_env()
     services = [
@@ -324,11 +349,7 @@ def build_services(skip_celery: bool) -> list[ManagedService]:
     ]
 
     if not skip_celery:
-        celery_cmd = (
-            [str(VENV_CELERY), "-A", "app.worker", "worker", "--loglevel=info", "--pool=solo"]
-            if VENV_CELERY.exists()
-            else [str(VENV_PYTHON), "-m", "celery", "-A", "app.worker", "worker", "--loglevel=info", "--pool=solo"]
-        )
+        celery_cmd = build_celery_command()
         services.append(
             ManagedService(
                 name="celery",

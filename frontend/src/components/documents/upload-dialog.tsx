@@ -162,6 +162,7 @@ function normalizedMetadataFormValue(field: keyof MetadataFormState, value: stri
 
 export function UploadDialog({ open, onOpenChange, supportedTypes: supportedTypesProp, aclEnabled: aclEnabledProp }: UploadDialogProps) {
   const queryClient = useQueryClient();
+  const fileInputId = React.useId();
   const [isDragging, setIsDragging] = React.useState(false);
   const [file, setFile] = React.useState<File | null>(null);
   const [stage, setStage] = React.useState<UploadStage>("idle");
@@ -241,6 +242,11 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
     () => activeTypes.map((t) => TYPE_CONFIG[t]?.label ?? t.toUpperCase()).join(", "),
     [activeTypes],
   );
+  const acceptValue = React.useMemo(
+    () => Array.from(new Set([...allowedExtensions, ...allowedMimeTypes])).join(","),
+    [allowedExtensions, allowedMimeTypes],
+  );
+  const hasTypeConstraints = allowedExtensions.length > 0 || allowedMimeTypes.length > 0;
 
   // Elapsed time ticker
   React.useEffect(() => {
@@ -292,7 +298,7 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
   const validateFile = (file: File): string | null => {
     // Check file type
     const extension = "." + file.name.split(".").pop()?.toLowerCase();
-    if (!allowedExtensions.includes(extension) && !allowedMimeTypes.includes(file.type)) {
+    if (hasTypeConstraints && !allowedExtensions.includes(extension) && !allowedMimeTypes.includes(file.type)) {
       return `Unsupported file type. Allowed: ${typeHelpText}`;
     }
 
@@ -303,6 +309,13 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
 
     return null;
   };
+
+  const openFilePicker = React.useCallback(() => {
+    if (!fileInputRef.current) return;
+    // Reset first so selecting the same file still emits onChange.
+    fileInputRef.current.value = "";
+    fileInputRef.current.click();
+  }, []);
 
   const handleFileSelect = (selectedFile: File) => {
     const validationError = validateFile(selectedFile);
@@ -340,6 +353,7 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
+    e.currentTarget.value = "";
     if (selectedFile) {
       handleFileSelect(selectedFile);
     }
@@ -629,33 +643,45 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
         <div className="space-y-4">
           {/* Drop zone */}
           {stage === "idle" && !file && (
-            <div
-              className={cn(
-                "border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
-                isDragging
-                  ? "border-primary bg-primary/5"
-                  : "border-muted-foreground/25 hover:border-primary/50"
-              )}
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onClick={() => fileInputRef.current?.click()}
-            >
+            <>
               <input
+                id={fileInputId}
                 ref={fileInputRef}
                 type="file"
-                className="hidden"
-                accept={allowedExtensions.join(",")}
+                className="sr-only"
+                accept={acceptValue}
                 onChange={handleInputChange}
               />
-              <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
-              <p className="text-sm font-medium">
-                Drop your file here or click to browse
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {typeHelpText} (max 50MB)
-              </p>
-            </div>
+              <label
+                htmlFor={fileInputId}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openFilePicker();
+                  }
+                }}
+                aria-label="Choose a document to upload"
+                className={cn(
+                  "border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
+                  isDragging
+                    ? "border-primary bg-primary/5"
+                    : "border-muted-foreground/25 hover:border-primary/50"
+                )}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+              >
+                <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-sm font-medium">
+                  Drop your file here or click to browse
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {typeHelpText} (max 50MB)
+                </p>
+              </label>
+            </>
           )}
 
           {/* Selected file */}

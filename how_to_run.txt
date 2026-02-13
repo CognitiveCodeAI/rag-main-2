@@ -47,9 +47,10 @@ TERMINAL 2 - Celery Worker:
     cd backend
     .\venv\Scripts\activate        (Windows)
     source venv/bin/activate       (Linux/macOS)
-    celery -A app.worker worker --loglevel=info --pool=solo
+    celery -A app.worker worker --loglevel=info --pool=prefork --concurrency=4
 
     NOTE: --pool=solo is REQUIRED on Windows.
+    On Linux/macOS, use --pool=prefork (recommended).
     The Celery worker reads REDIS_URL and REDIS_BACKEND from
     environment variables. If your Redis is not on localhost,
     set these before running:

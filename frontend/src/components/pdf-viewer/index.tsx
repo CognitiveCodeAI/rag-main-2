@@ -59,6 +59,12 @@ export interface CitationHighlight {
     height: number;
   };
   anchor_snippet?: string;
+  text?: string;
+  selector_bundle?: {
+    text_quote?: {
+      exact?: string;
+    };
+  };
   label?: string;
 }
 
@@ -83,6 +89,61 @@ interface TextHighlightRect {
   height: number;
 }
 
+function normalizeForSearch(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function sanitizeCitationSearchText(value: string): string {
+  let cleaned = normalizeForSearch(value);
+  // Remove common page-number prefixes that cause false hits in footers.
+  cleaned = cleaned.replace(/^page\s+\d+\s+/, "");
+  cleaned = cleaned.replace(/^\d+\s+/, "");
+  return cleaned.trim();
+}
+
+function mergeHighlightsByLine(rects: TextHighlightRect[]): TextHighlightRect[] {
+  if (rects.length <= 1) return rects;
+
+  const sorted = [...rects].sort((a, b) => {
+    if (Math.abs(a.y - b.y) <= 4) return a.x - b.x;
+    return a.y - b.y;
+  });
+
+  const merged: TextHighlightRect[] = [];
+  for (const rect of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last) {
+      merged.push({ ...rect });
+      continue;
+    }
+
+    const lineThreshold = Math.max(4, Math.min(last.height, rect.height) * 0.6);
+    const sameLine = Math.abs(rect.y - last.y) <= lineThreshold;
+    const gap = rect.x - (last.x + last.width);
+    const gapThreshold = Math.max(10, rect.height * 1.2);
+
+    if (sameLine && gap <= gapThreshold) {
+      const left = Math.min(last.x, rect.x);
+      const top = Math.min(last.y, rect.y);
+      const right = Math.max(last.x + last.width, rect.x + rect.width);
+      const bottom = Math.max(last.y + last.height, rect.y + rect.height);
+      last.x = left;
+      last.y = top;
+      last.width = right - left;
+      last.height = bottom - top;
+      continue;
+    }
+
+    merged.push({ ...rect });
+  }
+
+  return merged;
+}
+
 export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerProps) {
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -103,102 +164,140 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
     str?: string;
   };
   
-  // Find and highlight text matching the anchor_snippet
+  const getHighlightSearchText = useCallback((source?: CitationHighlight): string | null => {
+    if (!source) return null;
+
+    const candidates = [
+      source.selector_bundle?.text_quote?.exact,
+      source.text,
+      source.anchor_snippet,
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      const normalized = sanitizeCitationSearchText(candidate);
+      if (normalized.length >= 20) {
+        return normalized.slice(0, 420);
+      }
+    }
+
+    return null;
+  }, []);
+
+  const getBboxCoveragePercent = useCallback((
+    bbox: CitationHighlight["bbox"] | undefined,
+    pageSize: CitationHighlight["page_size"] | undefined,
+    viewport: pdfjsLib.PageViewport
+  ): number => {
+    if (!bbox) return 0;
+    const bboxWidth = Math.max(0, bbox.x1 - bbox.x0);
+    const bboxHeight = Math.max(0, bbox.y1 - bbox.y0);
+
+    const pageWidth = pageSize?.width ?? (viewport.viewBox[2] - viewport.viewBox[0]);
+    const pageHeight = pageSize?.height ?? (viewport.viewBox[3] - viewport.viewBox[1]);
+    if (pageWidth <= 0 || pageHeight <= 0) return 100;
+
+    return (bboxWidth * bboxHeight) / (pageWidth * pageHeight) * 100;
+  }, []);
+
+  // Find and highlight text matching a citation snippet.
   // Defined early to avoid initialization order issues
   const findTextHighlights = useCallback(async (
     page: pdfjsLib.PDFPageProxy,
     viewport: pdfjsLib.PageViewport,
-    anchorSnippet: string
+    searchInput: string
   ): Promise<TextHighlightRect[]> => {
     try {
       const textContent = await page.getTextContent();
-      const highlights: TextHighlightRect[] = [];
-      
-      // Normalize the search text - take first 60 chars for better matching
-      const searchText = anchorSnippet
-        .substring(0, 60)
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      
-      if (!searchText || searchText.length < 10) return [];
-      
-      // Build a continuous text string and track item positions
       const items = textContent.items as Array<{
         str: string;
         transform: number[];
         width: number;
         height: number;
       }>;
-      
-      // Concatenate all text items to search across boundaries
-      let fullText = "";
-      const itemPositions: Array<{ start: number; end: number; itemIndex: number }> = [];
-      
-      items.forEach((item, index) => {
-        const start = fullText.length;
-        fullText += item.str;
-        itemPositions.push({ start, end: fullText.length, itemIndex: index });
-        // Add space between items for word boundaries
-        fullText += " ";
-      });
-      
-      const normalizedFullText = fullText.replace(/\s+/g, " ").toLowerCase();
-      
-      // Find the match position
-      const matchIndex = normalizedFullText.indexOf(searchText);
-      if (matchIndex === -1) return [];
-      
-      // Find which text items contain the match
-      let charCount = 0;
-      let inMatch = false;
-      
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const itemStart = charCount;
-        const itemEnd = charCount + item.str.length + 1; // +1 for space
-        
-        // Check if this item overlaps with the match
-        const matchEnd = matchIndex + searchText.length;
-        const overlaps = itemStart < matchEnd && itemEnd > matchIndex;
-        
-        if (overlaps && item.str.trim()) {
-          // Get position from transform matrix
-          // transform = [scaleX, skewX, skewY, scaleY, translateX, translateY]
-          const tx = item.transform[4];
-          const ty = item.transform[5];
-          const itemScaleY = Math.abs(item.transform[3]);
-          
-          // Convert to viewport coordinates
-          const scaleX = viewport.width / (viewport.viewBox[2] - viewport.viewBox[0]);
-          const scaleY = viewport.height / (viewport.viewBox[3] - viewport.viewBox[1]);
-          
-          const x = tx * scaleX;
-          // PDF y=0 is at bottom, flip to top-left origin
-          const pageHeight = viewport.viewBox[3] - viewport.viewBox[1];
-          const y = (pageHeight - ty) * scaleY;
-          
-          // Calculate width and height
-          const width = (item.width || item.str.length * 6) * scaleX;
-          const height = (itemScaleY || 12) * scaleY;
-          
-          highlights.push({
-            x: Math.max(0, x),
-            y: Math.max(0, y - height), // Adjust for baseline
-            width: Math.max(10, width),
-            height: Math.max(10, height * 1.2), // Add some padding
-          });
-          
-          inMatch = true;
-        } else if (inMatch && !overlaps) {
-          // Stop once we've passed the match
+
+      const pageEntries: Array<{
+        item: {
+          str: string;
+          transform: number[];
+          width: number;
+          height: number;
+        };
+        start: number;
+        end: number;
+      }> = [];
+
+      let pageText = "";
+      for (const item of items) {
+        const normalizedItem = normalizeForSearch(item.str || "");
+        if (!normalizedItem) continue;
+
+        if (pageText.length > 0) {
+          pageText += " ";
+        }
+        const start = pageText.length;
+        pageText += normalizedItem;
+        const end = pageText.length;
+        pageEntries.push({ item, start, end });
+      }
+
+      if (!pageText) return [];
+
+      const normalizedInput = normalizeForSearch(searchInput);
+      const candidates = [
+        normalizedInput.slice(0, 420),
+        normalizedInput.slice(0, 280),
+        normalizedInput.slice(0, 180),
+        normalizedInput.slice(0, 100),
+      ]
+        .map((v) => v.trim())
+        .filter((v, i, arr) => v.length >= 20 && arr.indexOf(v) === i);
+
+      let matchStart = -1;
+      let matchedText = "";
+      for (const candidate of candidates) {
+        const idx = pageText.indexOf(candidate);
+        if (idx >= 0) {
+          matchStart = idx;
+          matchedText = candidate;
           break;
         }
-        
-        charCount = itemEnd;
       }
-      
-      return highlights;
+
+      if (matchStart < 0 || !matchedText) return [];
+      const matchEnd = matchStart + matchedText.length;
+
+      const rawRects: TextHighlightRect[] = [];
+      for (const entry of pageEntries) {
+        const overlaps = entry.start < matchEnd && entry.end > matchStart;
+        if (!overlaps) continue;
+
+        const item = entry.item;
+        const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+        const [x2] = viewport.convertToViewportPoint(
+          item.transform[4] + (item.width || 0),
+          item.transform[5]
+        );
+
+        let width = Math.abs(x2 - x);
+        const glyphHeight = Math.max(
+          10,
+          Math.abs(item.transform[3] || 0) * viewport.scale || 12 * viewport.scale
+        );
+
+        if (!Number.isFinite(width) || width < 8) {
+          width = Math.max(8, normalizeForSearch(item.str).length * glyphHeight * 0.45);
+        }
+
+        rawRects.push({
+          x: Math.max(0, x),
+          y: Math.max(0, y - glyphHeight),
+          width: Math.max(8, width),
+          height: Math.max(10, glyphHeight * 1.15),
+        });
+      }
+
+      return mergeHighlightsByLine(rawRects);
     } catch (err) {
       console.error("Error finding text highlights:", err);
       return [];
@@ -247,27 +346,22 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
   ) => {
     if (!bbox || !highlightRef.current) return;
 
-    // Use viewport.viewBox for accurate PDF coordinate transformation
-    // viewBox = [x0, y0, x1, y1] in PDF points
-    const pdfWidth = viewport.viewBox[2] - viewport.viewBox[0];
-    const pdfHeight = viewport.viewBox[3] - viewport.viewBox[1];
+    const [vx0, vy0, vx1, vy1] = viewport.convertToViewportRectangle([
+      bbox.x0,
+      bbox.y0,
+      bbox.x1,
+      bbox.y1,
+    ]);
 
-    const scaleX = viewport.width / pdfWidth;
-    const scaleY = viewport.height / pdfHeight;
+    const x = Math.min(vx0, vx1);
+    const y = Math.min(vy0, vy1);
+    const width = Math.abs(vx1 - vx0);
+    const height = Math.abs(vy1 - vy0);
 
-    const x = bbox.x0 * scaleX;
-    // Flip Y coordinate: PDF y=0 is at bottom, HTML y=0 is at top
-    const y = (pdfHeight - bbox.y1) * scaleY;
-    const width = (bbox.x1 - bbox.x0) * scaleX;
-    const height = (bbox.y1 - bbox.y0) * scaleY;
-
-    // Calculate what percentage of the page this covers
-    const bboxWidth = bbox.x1 - bbox.x0;
-    const bboxHeight = bbox.y1 - bbox.y0;
-    const coveragePercent = (bboxWidth * bboxHeight) / (pdfWidth * pdfHeight) * 100;
+    const coveragePercent = getBboxCoveragePercent(bbox, highlight?.page_size, viewport);
 
     // Only show bbox highlight for precise regions (<50% coverage)
-    if (coveragePercent <= 50) {
+    if (coveragePercent <= 35) {
       highlightRef.current.style.left = `${x}px`;
       highlightRef.current.style.top = `${y}px`;
       highlightRef.current.style.width = `${width}px`;
@@ -280,7 +374,7 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
     } else {
       highlightRef.current.style.display = "none";
     }
-  }, []);
+  }, [getBboxCoveragePercent, highlight?.page_size]);
 
   // Render current page
   useEffect(() => {
@@ -311,25 +405,30 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
 
         // Draw highlight if on current page
         if (highlight && highlight.page_no === currentPage) {
+          const searchText = getHighlightSearchText(highlight);
           if (highlight.bbox) {
-            // Calculate bbox coverage using viewport dimensions
-            const pdfWidth = viewport.viewBox[2] - viewport.viewBox[0];
-            const pdfHeight = viewport.viewBox[3] - viewport.viewBox[1];
-            const bboxWidth = highlight.bbox.x1 - highlight.bbox.x0;
-            const bboxHeight = highlight.bbox.y1 - highlight.bbox.y0;
-            const coveragePercent = (bboxWidth * bboxHeight) / (pdfWidth * pdfHeight) * 100;
+            const coveragePercent = getBboxCoveragePercent(
+              highlight.bbox,
+              highlight.page_size,
+              viewport
+            );
 
-            if (coveragePercent <= 50) {
+            if (coveragePercent <= 35) {
               // Precise bbox - use coordinate-based highlighting
               drawHighlight(viewport, highlight.bbox);
-            } else if (highlight.anchor_snippet) {
+            } else if (searchText) {
               // Large bbox - fall back to text search highlighting
-              const highlights = await findTextHighlights(page, viewport, highlight.anchor_snippet);
-              setTextHighlights(highlights);
+              const highlights = await findTextHighlights(page, viewport, searchText);
+              if (highlights.length > 0) {
+                setTextHighlights(highlights);
+              } else {
+                // Last resort: keep bbox rather than showing no highlight at all.
+                drawHighlight(viewport, highlight.bbox);
+              }
             }
-          } else if (highlight.anchor_snippet) {
+          } else if (searchText) {
             // No bbox but have anchor_snippet - use text search
-            const highlights = await findTextHighlights(page, viewport, highlight.anchor_snippet);
+            const highlights = await findTextHighlights(page, viewport, searchText);
             setTextHighlights(highlights);
           }
         }
@@ -339,7 +438,7 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
     };
 
     renderPage();
-  }, [pdf, currentPage, scale, highlight, findTextHighlights, drawHighlight]);
+  }, [pdf, currentPage, scale, highlight, findTextHighlights, drawHighlight, getHighlightSearchText, getBboxCoveragePercent]);
   
   // Text search using anchor_snippet (fallback for page navigation)
   useEffect(() => {
@@ -682,7 +781,7 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
                 {textHighlights.map((rect, i) => (
                   <div
                     key={i}
-                    className="absolute pointer-events-none bg-yellow-400/50 border-2 border-yellow-500 rounded-sm shadow-lg z-10"
+                    className="absolute pointer-events-none bg-yellow-300/45 border border-yellow-500/90 rounded-sm shadow-md z-10"
                     style={{
                       left: `${rect.x}px`,
                       top: `${rect.y}px`,

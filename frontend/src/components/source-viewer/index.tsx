@@ -40,6 +40,8 @@ export function SourceViewer({
         bbox: citation.bbox,
         page_size: citation.page_size,
         anchor_snippet: citation.anchor_snippet || citation.text,
+        text: citation.text,
+        selector_bundle: citation.selector_bundle,
         label: citation.label,
       }
     : undefined;
