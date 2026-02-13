@@ -104,9 +104,9 @@ function StatusIndicator({ status }: { status: "healthy" | "unhealthy" | "unknow
 
 export default function DashboardPage() {
   // Fetch health status
-  const { data: health, isLoading: healthLoading } = useQuery({
-    queryKey: ["health"],
-    queryFn: getHealth,
+  const { data: health, isLoading: healthLoading, isError: healthError } = useQuery({
+    queryKey: ["health", "services"],
+    queryFn: () => getHealth(true),
     refetchInterval: 30000,
   });
 
@@ -133,6 +133,26 @@ export default function DashboardPage() {
     );
   }, [collections]);
 
+  const workerService = health?.services?.celery_worker;
+  const apiStatus: "healthy" | "unhealthy" | "unknown" = healthLoading
+    ? "unknown"
+    : healthError
+    ? "unhealthy"
+    : "healthy";
+  const queueStatus: "healthy" | "unhealthy" | "unknown" =
+    workerService?.status === "healthy"
+      ? "healthy"
+      : workerService?.status === "unhealthy"
+      ? "unhealthy"
+      : "unknown";
+
+  const systemStatusLabel =
+    health?.status === "healthy"
+      ? "Online"
+      : health?.status === "degraded"
+      ? "Degraded"
+      : "Offline";
+
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page header */}
@@ -147,7 +167,7 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           title="System Status"
-          value={health?.status === "healthy" ? "Online" : "Offline"}
+          value={systemStatusLabel}
           description={health ? `Version ${health.version}` : "Connecting..."}
           icon={Activity}
           loading={healthLoading}
@@ -219,9 +239,7 @@ export default function DashboardPage() {
               <>
                 <div className="flex items-center justify-between">
                   <span className="text-sm">API Server</span>
-                  <StatusIndicator
-                    status={health?.status === "healthy" ? "healthy" : "unhealthy"}
-                  />
+                  <StatusIndicator status={apiStatus} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm">Vector Database</span>
@@ -231,10 +249,13 @@ export default function DashboardPage() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm">Processing Queue</span>
-                  <Badge variant="secondary" className="text-xs">
-                    Not checked
-                  </Badge>
+                  <StatusIndicator status={queueStatus} />
                 </div>
+                {workerService?.message && (
+                  <p className="text-xs text-muted-foreground">
+                    {workerService.message}
+                  </p>
+                )}
               </>
             )}
           </CardContent>

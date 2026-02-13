@@ -8,8 +8,10 @@ Runs queries against fixtures and measures:
 
 Usage:
     python -m tests.eval.run_eval                    # Run full evaluation
-    python -m tests.eval.run_eval --query q1        # Run specific query
     python -m tests.eval.run_eval --compare          # Compare with baseline
+
+Note: --query subset runs are blocked by the benchmark contract (allow_query_subset: false).
+To run a single query for debugging, create a debug contract with allow_query_subset: true.
 """
 
 import json
@@ -25,6 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
+from tests.eval.benchmark_contract import (
+    ContractRunInfo,
+    ContractValidationError,
+    enforce_retrieval_benchmark_contract,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -95,6 +102,7 @@ class EvalSummary:
     hard_recall: float = 0.0
     
     results: List[EvalResult] = field(default_factory=list)
+    contract: Optional[ContractRunInfo] = None
 
 
 class MockRetriever:
@@ -263,7 +271,8 @@ def evaluate_query(
 
 def run_evaluation(
     retriever,
-    query_ids: Optional[List[str]] = None
+    query_ids: Optional[List[str]] = None,
+    contract: Optional[ContractRunInfo] = None,
 ) -> EvalSummary:
     """Run full evaluation.
     
@@ -281,7 +290,7 @@ def run_evaluation(
     if query_ids:
         queries = [q for q in queries if q["id"] in query_ids]
     
-    summary = EvalSummary(total_queries=len(queries))
+    summary = EvalSummary(total_queries=len(queries), contract=contract)
     
     # Run evaluations
     for query in queries:
@@ -321,6 +330,11 @@ def print_report(summary: EvalSummary, baseline: Optional[EvalSummary] = None) -
     print("=" * 70)
     
     print(f"\n  Total Queries: {summary.total_queries}")
+    if summary.contract:
+        print(
+            f"  Contract: {summary.contract.contract_id} v{summary.contract.contract_version} "
+            f"({summary.contract.contract_sha256[:12]}...)"
+        )
     
     print("\n  EVIDENCE RECALL (figure/table retrieved)")
     print("-" * 50)
@@ -365,21 +379,39 @@ def main():
     parser.add_argument("--query", "-q", help="Run specific query ID")
     parser.add_argument("--compare", action="store_true", help="Compare with baseline")
     parser.add_argument("--no-expansion", action="store_true", help="Disable graph expansion (baseline)")
+    parser.add_argument(
+        "--contract",
+        default=str(Path(__file__).parent / "benchmark_contract.json"),
+        help="Path to benchmark contract JSON",
+    )
     
     args = parser.parse_args()
+    try:
+        contract_run = enforce_retrieval_benchmark_contract(
+            query_subset_requested=bool(args.query),
+            queries_path=str(QUERIES_FILE),
+            fixtures_manifest_path=str(FIXTURES_DIR / "manifest.json"),
+            contract_path=args.contract,
+        )
+    except ContractValidationError as e:
+        logger.error(f"Benchmark contract validation failed: {e}")
+        raise SystemExit(2) from e
+    logger.info(
+        f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+    )
     
     # Create retriever
     retriever = MockRetriever(use_graph_expansion=not args.no_expansion)
     
     # Run evaluation
     query_ids = [args.query] if args.query else None
-    summary = run_evaluation(retriever, query_ids)
+    summary = run_evaluation(retriever, query_ids, contract=contract_run)
     
     # Optionally run baseline comparison
     baseline = None
     if args.compare:
         baseline_retriever = MockRetriever(use_graph_expansion=False)
-        baseline = run_evaluation(baseline_retriever, query_ids)
+        baseline = run_evaluation(baseline_retriever, query_ids, contract=contract_run)
     
     # Print report
     print_report(summary, baseline)

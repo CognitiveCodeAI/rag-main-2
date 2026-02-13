@@ -32,6 +32,7 @@ class Document(Base):
     __table_args__ = (
         Index("ix_documents_checksum", "checksum"),
         Index("ix_documents_source_uri", "source_uri"),
+        Index("ix_documents_graph_doc_version", "graph_doc_id", "graph_version"),
         Index("ix_documents_created_at", "created_at"),
     )
     
@@ -40,6 +41,9 @@ class Document(Base):
     source_type = Column(String(64), nullable=False)
     source_uri = Column(Text, nullable=False)
     mime_type = Column(String(128), nullable=True)
+    # Canonical graph identity produced by GraphIngestionPipeline.
+    graph_doc_id = Column(String(64), nullable=True)
+    graph_version = Column(Integer, nullable=True)
     checksum = Column(String(128), nullable=False)
     owner = Column(String(256), nullable=True)
     team = Column(String(256), nullable=True)
@@ -62,12 +66,16 @@ class IngestJob(Base):
     __table_args__ = (
         Index("ix_ingest_jobs_status", "status"),
         Index("ix_ingest_jobs_doc_id", "doc_id"),
+        Index("ix_ingest_jobs_graph_doc_version", "graph_doc_id", "graph_version"),
         Index("ix_ingest_jobs_created_at", "created_at"),
         Index("ix_ingest_jobs_status_created", "status", "created_at"),
     )
     
     job_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_id = Column(String(256), ForeignKey("documents.doc_id"), nullable=True)
+    # Canonical graph identity produced by GraphIngestionPipeline.
+    graph_doc_id = Column(String(64), nullable=True)
+    graph_version = Column(Integer, nullable=True)
     status = Column(String(32), nullable=False, default="pending")
     pipeline_stage = Column(String(32), nullable=True)
     error = Column(Text, nullable=True)
@@ -206,3 +214,71 @@ class EmbeddingJob(Base):
     
     def __repr__(self) -> str:
         return f"<EmbeddingJob(job_id={self.job_id}, status={self.status})>"
+
+
+class AppSettings(Base):
+    """Application settings (singleton row).
+
+    Stores runtime-configurable settings that can be changed via the UI
+    without requiring server restarts or environment variable changes.
+    """
+
+    __tablename__ = "app_settings"
+    __table_args__ = (
+        # Ensure only one row can exist (singleton pattern)
+        Index("ix_app_settings_singleton", "id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, default=1)
+
+    # QA Settings
+    enable_llm_query_rewrite = Column(Boolean, default=False, nullable=False)
+    retrieval_top_k = Column(Integer, default=5, nullable=False)
+    enable_reranking = Column(Boolean, default=True, nullable=False)
+    rerank_candidate_max = Column(Integer, default=15, nullable=False)
+    max_context_tokens = Column(Integer, default=8000, nullable=False)
+
+    # Ingestion Settings
+    ocr_quality_threshold = Column(Float, default=0.3, nullable=False)
+    target_chunk_tokens = Column(Integer, default=500, nullable=False)
+    chunk_overlap_tokens = Column(Integer, default=50, nullable=False)
+
+    # Timestamp
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<AppSettings(id={self.id}, updated_at={self.updated_at})>"
+
+
+class IngestPreview(Base):
+    """Staged upload preview for metadata review before processing."""
+
+    __tablename__ = "ingest_previews"
+    __table_args__ = (
+        Index("ix_ingest_previews_status", "status"),
+        Index("ix_ingest_previews_expires_at", "expires_at"),
+        Index("ix_ingest_previews_created_at", "created_at"),
+        Index("ix_ingest_previews_checksum", "checksum"),
+    )
+
+    preview_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename = Column(String(512), nullable=False)
+    source_type = Column(String(64), nullable=False)
+    mime_type = Column(String(128), nullable=True)
+    preview_doc_id = Column(String(256), nullable=False)
+    preview_version_id = Column(String(64), nullable=False, default="v1")
+    checksum = Column(String(128), nullable=False)
+    tenant_id = Column(String(64), nullable=True)
+
+    # Extracted metadata payload (includes core fields)
+    metadata_extracted = Column(JSONB, nullable=False, default=dict)
+    metadata_provenance = Column(JSONB, nullable=False, default=dict)
+    metadata_confidence = Column(JSONB, nullable=False, default=dict)
+
+    status = Column(String(32), nullable=False, default="ready")  # ready|processed|expired
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<IngestPreview(preview_id={self.preview_id}, status={self.status})>"

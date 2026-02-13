@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   FileText,
@@ -21,10 +21,12 @@ import {
 } from "lucide-react";
 
 import { cn, formatDate, formatRelativeTime, getFilename } from "@/lib/utils";
-import { listDocuments, getHealth } from "@/lib/api";
+import { listDocuments, getHealth, embedDocument } from "@/lib/api";
+import { toast } from "sonner";
 import type { DocumentGraph } from "@/lib/api";
 import { PermissionsBadge } from "@/components/documents/permissions-badge";
 import { PermissionsDialog } from "@/components/documents/permissions-dialog";
+import { DeleteDialog } from "@/components/documents/delete-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,11 +50,23 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { UploadDialog } from "@/components/documents/upload-dialog";
 
-function StatusBadge({ embedded }: { embedded: boolean }) {
-  if (embedded) {
+function StatusBadge({
+  embedded,
+  processingStatus,
+}: {
+  embedded: boolean;
+  processingStatus?: string | null;
+}) {
+  if (processingStatus === "failed" || processingStatus === "partial") {
+    return <Badge variant="destructive">Failed</Badge>;
+  }
+  if (embedded || processingStatus === "completed" || processingStatus === "skipped_alias") {
     return <Badge variant="default">Indexed</Badge>;
   }
-  return <Badge variant="secondary">Processing</Badge>;
+  if (processingStatus === "processing" || processingStatus === "pending" || processingStatus === "queued") {
+    return <Badge variant="secondary">Processing</Badge>;
+  }
+  return <Badge variant="secondary">Pending</Badge>;
 }
 
 function AuthorityBadge({ tier }: { tier: number }) {
@@ -70,6 +84,7 @@ function AuthorityBadge({ tier }: { tier: number }) {
 
 function DocumentsContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // Skip SSR for Radix components — avoids hydration ID mismatch
   const [mounted, setMounted] = React.useState(false);
@@ -84,6 +99,20 @@ function DocumentsContent() {
   const [aclEnabled, setAclEnabled] = React.useState(false);
   const [supportedTypes, setSupportedTypes] = React.useState<string[] | null>(null);
   const [permissionsDocId, setPermissionsDocId] = React.useState<string | null>(null);
+  const [deleteDoc, setDeleteDoc] = React.useState<DocumentGraph | null>(null);
+
+  const handleReindex = async (doc: DocumentGraph) => {
+    try {
+      toast.info("Starting re-indexing...");
+      await embedDocument({
+        doc_id: doc.doc_id,
+        version_id: String(doc.version),
+      });
+      toast.success("Re-indexing job started. Check the Processing page for status.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to start re-indexing");
+    }
+  };
 
   React.useEffect(() => {
     getHealth()
@@ -287,7 +316,17 @@ function DocumentsContent() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <StatusBadge embedded={!!doc.embedded_collection_version} />
+                        <div className="space-y-1">
+                          <StatusBadge
+                            embedded={!!doc.embedded_collection_version}
+                            processingStatus={doc.processing_status}
+                          />
+                          {(doc.processing_status === "failed" || doc.processing_status === "partial") && doc.processing_error && (
+                            <p className="text-xs text-destructive max-w-[260px] truncate" title={doc.processing_error}>
+                              {doc.processing_error}
+                            </p>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <DropdownMenu>
@@ -297,11 +336,15 @@ function DocumentsContent() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => router.push(`/inspect?doc_id=${doc.doc_id}`)}
+                            >
                               <Eye className="mr-2 h-4 w-4" />
                               View Details
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => router.push(`/chat?doc_id=${doc.doc_id}`)}
+                            >
                               <MessageSquare className="mr-2 h-4 w-4" />
                               Chat with Document
                             </DropdownMenuItem>
@@ -311,12 +354,15 @@ function DocumentsContent() {
                                 Permissions
                               </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleReindex(doc)}>
                               <RefreshCw className="mr-2 h-4 w-4" />
                               Re-index
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive">
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => setDeleteDoc(doc)}
+                            >
                               <Trash2 className="mr-2 h-4 w-4" />
                               Delete
                             </DropdownMenuItem>
@@ -365,6 +411,13 @@ function DocumentsContent() {
         docId={permissionsDocId}
         open={!!permissionsDocId}
         onOpenChange={(open) => { if (!open) setPermissionsDocId(null); }}
+      />
+
+      {/* Delete confirmation dialog */}
+      <DeleteDialog
+        document={deleteDoc}
+        open={!!deleteDoc}
+        onOpenChange={(open) => { if (!open) setDeleteDoc(null); }}
       />
     </div>
   );

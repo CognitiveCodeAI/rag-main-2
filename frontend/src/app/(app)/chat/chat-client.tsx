@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Send,
@@ -13,11 +14,13 @@ import {
   Sparkles,
   Copy,
   Check,
+  RotateCcw,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 
 import { cn, formatDuration, generateId, getFilename } from "@/lib/utils";
+import { useChatStorage, type RuntimeMessage } from "@/hooks/use-chat-storage";
 import { askQuestion, listDocuments } from "@/lib/api";
 import type { AskResponse, Citation, Conflict } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -130,15 +133,9 @@ function parseInlineCitations(
   return <>{parts}</>;
 }
 
-// Message types
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
+// Message type - extends RuntimeMessage with typed response
+interface Message extends Omit<RuntimeMessage, "response"> {
   response?: AskResponse;
-  isLoading?: boolean;
-  error?: string;
 }
 
 // Citation chip component
@@ -592,7 +589,21 @@ function ChatMessage({
             )}
             
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              {message.role === "assistant" && message.response?.citations ? (
+              {message.role === "assistant" && (!message.content || !message.content.trim()) ? (
+                // Empty response - show helpful message
+                <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-medium text-amber-700 dark:text-amber-400">
+                      No answer could be generated
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      The system couldn&apos;t find relevant information in the selected document to answer your question.
+                      This may happen if the document hasn&apos;t finished processing or doesn&apos;t contain information related to your query.
+                    </p>
+                  </div>
+                </div>
+              ) : message.role === "assistant" && message.response?.citations ? (
                 // Parse inline [seed:X] citations and render as clickable chips
                 parseInlineCitations(
                   message.content,
@@ -665,15 +676,14 @@ function ChatMessage({
 }
 
 export default function ChatClient() {
-  const [messages, setMessages] = React.useState<Message[]>([]);
+  const searchParams = useSearchParams();
   const [input, setInput] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
-  const [selectedDoc, setSelectedDoc] = React.useState<string>("__all__"); // Default to all documents
   const [selectedResponse, setSelectedResponse] = React.useState<AskResponse | null>(null);
   const [sourceSheetOpen, setSourceSheetOpen] = React.useState(false);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
-  
+
   // PDF Viewer state for citation highlighting
   const [pdfViewerOpen, setPdfViewerOpen] = React.useState(false);
   const [pdfViewerUrl, setPdfViewerUrl] = React.useState("");
@@ -687,6 +697,43 @@ export default function ChatClient() {
   });
 
   const documents = docsData?.items || [];
+
+  // Persistent chat storage - survives page navigation
+  const {
+    messages: storedMessages,
+    setMessages: setStoredMessages,
+    selectedDoc,
+    setSelectedDoc,
+    clearChat,
+    isHydrated,
+  } = useChatStorage({
+    validDocIds: documents.map((d) => d.doc_id),
+    defaultSelectedDoc: "__all__",
+  });
+
+  // Cast messages to include typed response (safe because we only store Message objects)
+  const messages = storedMessages as Message[];
+  const setMessages = setStoredMessages as React.Dispatch<React.SetStateAction<Message[]>>;
+
+  // Set selected document from URL query parameter (takes precedence over stored value)
+  React.useEffect(() => {
+    const docId = searchParams.get("doc_id");
+    if (docId && documents.length > 0) {
+      // Verify the doc exists in the list
+      const docExists = documents.some((d) => d.doc_id === docId);
+      if (docExists && docId !== selectedDoc) {
+        setSelectedDoc(docId);
+      }
+    }
+  }, [searchParams, documents, selectedDoc, setSelectedDoc]);
+
+  // Clear chat and start fresh
+  const handleNewChat = React.useCallback(() => {
+    clearChat();
+    setSelectedResponse(null);
+    setSourceSheetOpen(false);
+    inputRef.current?.focus();
+  }, [clearChat]);
 
   // Auto-scroll to bottom
   React.useEffect(() => {
@@ -878,6 +925,12 @@ export default function ChatClient() {
         </div>
 
         <div className="flex items-center gap-2">
+          {messages.length > 0 && (
+            <Button variant="outline" size="sm" onClick={handleNewChat}>
+              <RotateCcw className="h-4 w-4 mr-2" />
+              New Chat
+            </Button>
+          )}
           <Sheet open={sourceSheetOpen} onOpenChange={setSourceSheetOpen}>
             <SheetTrigger asChild>
               <Button variant="outline" size="sm" disabled={!selectedResponse}>
@@ -905,10 +958,17 @@ export default function ChatClient() {
               <div className="bg-primary/10 p-4 rounded-full mb-4">
                 <Sparkles className="h-8 w-8 text-primary" />
               </div>
-              <h2 className="text-xl font-semibold mb-2">Have a conversation with our FDD</h2>
+              <h2 className="text-xl font-semibold mb-2">
+                {selectedDoc === "__all__"
+                  ? "Ask questions about your documents"
+                  : `Chat with ${getFilename(documents.find(d => d.doc_id === selectedDoc)?.source_uri || "document")}`
+                }
+              </h2>
               <p className="text-muted-foreground max-w-md">
-                Ask questions about the 2025 FDD - All States except CA, HI, IL, IN, MD, MN, NY, ND, SD, VA, WA.pdf. 
-                I&apos;ll provide answers with citations to the relevant sections.
+                {selectedDoc === "__all__"
+                  ? "Ask questions across all your documents. I'll search for relevant information and provide answers with citations."
+                  : "Ask questions about this document. I'll provide answers with citations to the relevant sections."
+                }
               </p>
             </div>
           ) : (

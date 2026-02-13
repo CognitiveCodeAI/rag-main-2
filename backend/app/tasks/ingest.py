@@ -12,9 +12,10 @@ from typing import Any
 
 from app.worker import celery_app
 from app.db.session import session_scope
-from app.db.models import IngestJob
+from app.db.models import Document, IngestJob
 from app.storage.minio_client import get_storage_client
 from app.graph.pipeline import GraphIngestionPipeline
+from app.settings_service import get_runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ def ingest_document_task(
     allowed_roles: list[str] | None = None,
     allowed_groups: list[str] | None = None,
     allowed_users: list[str] | None = None,
+    metadata_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Process a document through the Graph Ingestion Pipeline.
 
@@ -47,10 +49,11 @@ def ingest_document_task(
     Args:
         job_id: Ingest job UUID
         doc_id: Document ID (used as hint, pipeline may generate different canonical ID)
-        version_id: Version ID
+        version_id: Legacy version ID (raw object identity in MinIO)
         filename: Original filename
         source_type: Document type (pdf, docx, pptx, etc.)
         ingestion_backend: Optional backend override ("native" or "docling")
+        metadata_overrides: Optional user-edited metadata values from preview flow
 
     Returns:
         Dict with job status and results
@@ -83,8 +86,13 @@ def ingest_document_task(
         raw_bytes = storage.get_raw(doc_id, version_id, filename)
         logger.info(f"Retrieved raw document: {len(raw_bytes)} bytes")
 
-        # 2. Build source URI for the document
+        # 2. Resolve source URI from persisted legacy document row.
+        # This removes cross-service drift from reconstructing source_uri.
         source_uri = f"upload://{filename}"
+        with session_scope() as session:
+            legacy_doc = session.query(Document).filter(Document.doc_id == doc_id).first()
+            if legacy_doc and legacy_doc.source_uri:
+                source_uri = legacy_doc.source_uri
 
         # 2b. Resolve ingestion backend
         _update_stage("resolving_backend")
@@ -97,9 +105,13 @@ def ingest_document_task(
 
         # 3. Run Graph Ingestion Pipeline
         with session_scope() as db:
+            # Load runtime settings for OCR threshold
+            runtime = get_runtime_settings(db)
+
             pipeline = GraphIngestionPipeline(
                 db,
-                skip_ocr=True,
+                skip_ocr=False,  # Allow OCR based on quality threshold
+                ocr_quality_threshold=runtime.ocr_quality_threshold,
                 ingestion_backend=resolved_backend,
                 filename=filename,
                 source_type=source_type,
@@ -114,6 +126,7 @@ def ingest_document_task(
                 pdf_bytes=raw_bytes,
                 source_uri=source_uri,
                 stage_callback=_update_stage,
+                metadata_overrides=metadata_overrides,
             )
             
             logger.info(f"Graph ingestion complete: doc_id={result.doc_id}")
@@ -123,19 +136,23 @@ def ingest_document_task(
             logger.info(f"  Tables: {result.total_tables}")
             logger.info(f"  Is duplicate: {result.is_content_duplicate}")
             
-            # Store the actual doc_id from the pipeline (may differ from input)
+            # Store the actual graph identity from the pipeline.
             actual_doc_id = result.doc_id
+            actual_graph_version = result.version
         
         # 4. Update job status to completed
-        # NOTE: We don't update job.doc_id because ingest_jobs has FK to legacy 'documents' table
-        # The actual_doc_id is stored in DocumentGraph, not documents
         with session_scope() as session:
             job = session.query(IngestJob).filter_by(job_id=job_uuid).first()
             if job:
                 job.status = "completed"
                 job.completed_at = datetime.utcnow()
-                if job.doc_id != actual_doc_id:
-                    logger.info(f"Graph doc_id differs from job doc_id: {job.doc_id} -> {actual_doc_id} (not updating job due to FK constraint)")
+                job.graph_doc_id = actual_doc_id
+                job.graph_version = actual_graph_version
+
+            legacy_doc = session.query(Document).filter(Document.doc_id == doc_id).first()
+            if legacy_doc:
+                legacy_doc.graph_doc_id = actual_doc_id
+                legacy_doc.graph_version = actual_graph_version
         
         logger.info(f"Ingestion completed: job={job_id}")
         
@@ -143,6 +160,8 @@ def ingest_document_task(
             "status": "completed",
             "job_id": job_id,
             "doc_id": actual_doc_id,
+            "graph_doc_id": actual_doc_id,
+            "graph_version": actual_graph_version,
             "version_id": version_id,
             "chunk_count": result.total_chunks,
             "page_count": result.total_pages,

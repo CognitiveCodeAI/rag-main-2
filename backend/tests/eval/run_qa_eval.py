@@ -32,6 +32,12 @@ from app.db.session import session_scope
 from app.graph.ids import compute_doc_id
 from app.qa.runner import QARunner, QAResult
 from app.qa.gate_metrics import save_gate_metrics, load_gate_context
+from tests.eval.benchmark_contract import (
+    ContractRunInfo,
+    ContractValidationError,
+    enforce_qa_benchmark_contract,
+    enforce_report_contract_stamp,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,6 +144,7 @@ class EvalReport:
     figure_linkage_total: int = 0
     
     total_time_ms: float = 0.0
+    contract: Optional[ContractRunInfo] = None
 
 
 @dataclass
@@ -172,12 +179,35 @@ class ABReport:
     avg_rerank_delta_pct: float = 0.0
     avg_latency_overhead_ms: float = 0.0
     avg_latency_overhead_pct: float = 0.0
+    contract: Optional[ContractRunInfo] = None
 
 
 def load_golden_questions(path: str) -> Dict[str, Any]:
     """Load golden questions from JSON file."""
     with open(path, 'r') as f:
         return json.load(f)
+
+
+def append_contract_stamp(lines: List[str], contract: Optional[ContractRunInfo]) -> None:
+    """Append benchmark contract metadata to a markdown report.
+
+    Enforces `require_report_contract_stamp` constraint from benchmark contract.
+    Raises ContractValidationError if stamp is required but no contract was provided.
+    """
+    # Enforce the require_report_contract_stamp constraint
+    enforce_report_contract_stamp(contract)
+
+    if not contract:
+        return
+    lines.extend(
+        [
+            f"**Benchmark Contract:** `{contract.contract_id}` v{contract.contract_version}",
+            f"**Contract Mode:** `{contract.mode}`",
+            f"**Contract SHA256:** `{contract.contract_sha256}`",
+            f"**Contract File:** `{contract.contract_path}`",
+            "",
+        ]
+    )
 
 
 @dataclass
@@ -555,7 +585,8 @@ def generate_phase2_report(
     doc_id: str,
     doc_path: str,
     timestamp: str,
-    results: List[QuestionEval]
+    results: List[QuestionEval],
+    contract: Optional[ContractRunInfo] = None,
 ) -> str:
     """Generate Phase-2 adversarial evaluation report."""
     lines = []
@@ -565,6 +596,7 @@ def generate_phase2_report(
     lines.append(f"**Doc ID:** `{doc_id}`")
     lines.append(f"**Timestamp:** {timestamp}")
     lines.append("")
+    append_contract_stamp(lines, contract)
     
     total = len(results)
     passed = sum(1 for r in results if r.phase2_pass)
@@ -879,6 +911,7 @@ def generate_report(report: EvalReport) -> str:
     lines.append(f"**Timestamp:** {report.timestamp}")
     lines.append(f"**Total Time:** {report.total_time_ms:.0f}ms")
     lines.append("")
+    append_contract_stamp(lines, report.contract)
     
     # Summary metrics
     lines.append("## Summary")
@@ -1066,7 +1099,8 @@ def run_evaluation(
     golden_path: str,
     doc_path: Optional[str] = None,
     top_k: int = 5,
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
+    contract: Optional[ContractRunInfo] = None,
 ) -> EvalReport:
     """Run full evaluation.
     
@@ -1102,7 +1136,8 @@ def run_evaluation(
         doc_id=doc_id,
         doc_path=pdf_path,
         timestamp=datetime.utcnow().isoformat(),
-        total_questions=len(golden["questions"])
+        total_questions=len(golden["questions"]),
+        contract=contract,
     )
     
     # Run evaluation
@@ -1160,7 +1195,8 @@ def run_phase2_evaluation(
     top_k: int = 5,
     output_path: Optional[str] = None,
     enable_rerank: bool = False,
-    rerank_force: bool = False
+    rerank_force: bool = False,
+    contract: Optional[ContractRunInfo] = None,
 ) -> List[QuestionEval]:
     """Run Phase-2 adversarial evaluation.
     
@@ -1205,7 +1241,8 @@ def run_phase2_evaluation(
         doc_id=doc_id,
         doc_path=pdf_path,
         timestamp=timestamp,
-        results=results
+        results=results,
+        contract=contract,
     )
     
     if output_path:
@@ -1227,6 +1264,7 @@ def generate_ab_report(report: ABReport) -> str:
     lines.append(f"**Doc ID:** `{report.doc_id}`")
     lines.append(f"**Timestamp:** {report.timestamp}")
     lines.append("")
+    append_contract_stamp(lines, report.contract)
     
     lines.append("## Summary")
     lines.append("")
@@ -1319,7 +1357,8 @@ def run_ab_evaluation(
     golden_path: str,
     doc_path: Optional[str] = None,
     top_k: int = 5,
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
+    contract: Optional[ContractRunInfo] = None,
 ) -> ABReport:
     """Run A/B evaluation with rerank disabled/enabled."""
     golden = load_golden_questions(golden_path)
@@ -1334,7 +1373,8 @@ def run_ab_evaluation(
         doc_id=doc_id,
         doc_path=pdf_path,
         timestamp=datetime.utcnow().isoformat(),
-        total_questions=len(golden["questions"])
+        total_questions=len(golden["questions"]),
+        contract=contract,
     )
     
     with session_scope() as db:
@@ -1479,13 +1519,15 @@ class PropSafetyReport:
     fallback_count: int = 0
     avg_latency_ms: float = 0.0
     total_llm_calls: int = 0
+    contract: Optional[ContractRunInfo] = None
 
 
 def run_propagation_safety_evaluation(
     golden_path: str,
     doc_path: Optional[str] = None,
     top_k: int = 5,
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
+    contract: Optional[ContractRunInfo] = None,
 ) -> PropSafetyReport:
     """Run evaluation with propagation_safety mode enabled.
     
@@ -1519,7 +1561,8 @@ def run_propagation_safety_evaluation(
         doc_id=doc_id,
         doc_path=pdf_path,
         timestamp=datetime.utcnow().isoformat(),
-        total_questions=len(questions_list)
+        total_questions=len(questions_list),
+        contract=contract,
     )
     
     with session_scope() as db:
@@ -1585,7 +1628,7 @@ def run_propagation_safety_evaluation(
                     c.get("node_id", "") for c in result.citations
                 ]
                 evidence_result = check_evidence_recall(q_eval_temp, expected_evidence, doc_id, db)
-                q_result.evidence_recall = evidence_result.found
+                q_result.evidence_recall = evidence_result.passed
             
             # Keyword match rate
             expected_keywords = q_data.get("expected_keywords", [])
@@ -1633,23 +1676,28 @@ def generate_propagation_safety_report(report: PropSafetyReport) -> str:
         f"**Doc ID:** `{report.doc_id}`",
         f"**Timestamp:** {report.timestamp}",
         "",
-        "## Summary",
-        "",
-        "| Metric | Value |",
-        "|--------|-------|",
-        f"| Total Questions | {report.total_questions} |",
-        f"| Evidence Recall | {report.evidence_recall_count}/{report.total_questions} |",
-        f"| Avg Sub-Q Completeness | {report.avg_sub_question_completeness:.1%} |",
-        f"| Conflict Mention Rate | {report.conflict_mention_rate:.1%} |",
-        f"| Fallback Count | {report.fallback_count} |",
-        f"| Avg Latency | {report.avg_latency_ms:.0f}ms |",
-        f"| Total LLM Calls | {report.total_llm_calls} |",
-        "",
-        "## Results by Question",
-        "",
-        "| # | Sub-Qs | Completeness | Evidence | Conflicts | Latency |",
-        "|---|--------|--------------|----------|-----------|---------|",
     ]
+    append_contract_stamp(lines, report.contract)
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Total Questions | {report.total_questions} |",
+            f"| Evidence Recall | {report.evidence_recall_count}/{report.total_questions} |",
+            f"| Avg Sub-Q Completeness | {report.avg_sub_question_completeness:.1%} |",
+            f"| Conflict Mention Rate | {report.conflict_mention_rate:.1%} |",
+            f"| Fallback Count | {report.fallback_count} |",
+            f"| Avg Latency | {report.avg_latency_ms:.0f}ms |",
+            f"| Total LLM Calls | {report.total_llm_calls} |",
+            "",
+            "## Results by Question",
+            "",
+            "| # | Sub-Qs | Completeness | Evidence | Conflicts | Latency |",
+            "|---|--------|--------------|----------|-----------|---------|",
+        ]
+    )
     
     for q in report.questions:
         conflict_str = "Yes (mentioned)" if q.conflict_mentioned else ("Yes" if q.has_conflicts else "No")
@@ -1742,13 +1790,15 @@ class TrackLikeReport:
     context_harm_count: int = 0
     context_help_count: int = 0
     avg_latency_overhead_pct: float = 0.0
+    contract: Optional[ContractRunInfo] = None
 
 
 def run_tracklike_evaluation(
     questions_path: str,
     doc_path: Optional[str] = None,
     top_k: int = 5,
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
+    contract: Optional[ContractRunInfo] = None,
 ) -> TrackLikeReport:
     """Run TRACK-like comparison: standard vs propagation_safety.
     
@@ -1785,7 +1835,8 @@ def run_tracklike_evaluation(
         return TrackLikeReport(
             doc_id="",
             doc_path="",
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.utcnow().isoformat(),
+            contract=contract,
         )
     
     if doc_path:
@@ -1806,7 +1857,8 @@ def run_tracklike_evaluation(
         doc_id=doc_id,
         doc_path=pdf_path,
         timestamp=datetime.utcnow().isoformat(),
-        total_questions=len(questions_list)
+        total_questions=len(questions_list),
+        contract=contract,
     )
     
     with session_scope() as db:
@@ -1857,14 +1909,14 @@ def run_tracklike_evaluation(
                 std_q_eval.seed_pages = [c.get("page_no", 0) for c in standard_result.citations]
                 std_q_eval.seed_node_ids = [c.get("node_id", "") for c in standard_result.citations]
                 std_evidence = check_evidence_recall(std_q_eval, expected_evidence, doc_id, db)
-                q_result.standard_evidence_recall = std_evidence.found
+                q_result.standard_evidence_recall = std_evidence.passed
                 
                 # Propagation safety
                 prop_q_eval = QuestionEval(question_id=q_id, question=question)
                 prop_q_eval.seed_pages = [c.get("page_no", 0) for c in prop_result.citations]
                 prop_q_eval.seed_node_ids = [c.get("node_id", "") for c in prop_result.citations]
                 prop_evidence = check_evidence_recall(prop_q_eval, expected_evidence, doc_id, db)
-                q_result.prop_safety_evidence_recall = prop_evidence.found
+                q_result.prop_safety_evidence_recall = prop_evidence.passed
             
             # Check sub-question completeness
             audit = prop_result.propagation_safety_audit
@@ -1937,24 +1989,29 @@ def generate_tracklike_report(report: TrackLikeReport) -> str:
         f"**Doc ID:** `{report.doc_id}`",
         f"**Timestamp:** {report.timestamp}",
         "",
-        "## Summary",
-        "",
-        "| Metric | Standard | Propagation Safety |",
-        "|--------|----------|-------------------|",
-        f"| Evidence Recall | {report.standard_evidence_recall}/{report.total_questions} | {report.prop_safety_evidence_recall}/{report.total_questions} |",
-        "",
-        "| Metric | Value |",
-        "|--------|-------|",
-        f"| Conflict Resolution Correct | {report.conflict_resolution_correct_count}/{report.total_questions} |",
-        f"| Context Harm (std good, prop bad) | {report.context_harm_count} |",
-        f"| Context Help (prop good, std bad) | {report.context_help_count} |",
-        f"| Avg Latency Overhead | {report.avg_latency_overhead_pct:.1f}% |",
-        "",
-        "## Results by Question",
-        "",
-        "| # | Type | Std Recall | Prop Recall | Conflict OK | Harm | Help | Latency +% |",
-        "|---|------|------------|-------------|-------------|------|------|------------|",
     ]
+    append_contract_stamp(lines, report.contract)
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            "| Metric | Standard | Propagation Safety |",
+            "|--------|----------|-------------------|",
+            f"| Evidence Recall | {report.standard_evidence_recall}/{report.total_questions} | {report.prop_safety_evidence_recall}/{report.total_questions} |",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Conflict Resolution Correct | {report.conflict_resolution_correct_count}/{report.total_questions} |",
+            f"| Context Harm (std good, prop bad) | {report.context_harm_count} |",
+            f"| Context Help (prop good, std bad) | {report.context_help_count} |",
+            f"| Avg Latency Overhead | {report.avg_latency_overhead_pct:.1f}% |",
+            "",
+            "## Results by Question",
+            "",
+            "| # | Type | Std Recall | Prop Recall | Conflict OK | Harm | Help | Latency +% |",
+            "|---|------|------------|-------------|-------------|------|------|------------|",
+        ]
+    )
     
     for q in report.questions:
         std_recall = "Yes" if q.standard_evidence_recall else "No"
@@ -2058,6 +2115,7 @@ class FinalBossReport:
     
     # Details
     questions: List[FinalBossQuestionResult] = field(default_factory=list)
+    contract: Optional[ContractRunInfo] = None
 
 
 def check_injection_resistance(
@@ -2214,7 +2272,8 @@ def determine_actual_behavior(answer: str, qa_result: QAResult) -> str:
 def run_finalboss_evaluation(
     questions_path: str,
     top_k: int = 5,
-    output_path: str = None
+    output_path: str = None,
+    contract: Optional[ContractRunInfo] = None,
 ) -> FinalBossReport:
     """Run the Final Boss 50-question evaluation suite."""
     
@@ -2236,7 +2295,8 @@ def run_finalboss_evaluation(
     
     report = FinalBossReport(
         timestamp=datetime.now().isoformat(),
-        total_questions=len(questions)
+        total_questions=len(questions),
+        contract=contract,
     )
     
     total_start = datetime.now()
@@ -2409,6 +2469,7 @@ def generate_finalboss_report(report: FinalBossReport) -> str:
     lines.append(f"**Timestamp:** {report.timestamp}")
     lines.append(f"**Total Time:** {report.total_time_ms:.0f}ms")
     lines.append("")
+    append_contract_stamp(lines, report.contract)
     
     # Summary table
     lines.append("## Summary")
@@ -2555,6 +2616,11 @@ def main():
         action="store_true",
         help="Run Final Boss 50-question real-world evaluation"
     )
+    parser.add_argument(
+        "--contract",
+        default=str(Path(__file__).parent / "benchmark_contract.json"),
+        help="Path to benchmark contract JSON"
+    )
     
     args = parser.parse_args()
     
@@ -2566,62 +2632,153 @@ def main():
     if args.phase2:
         output_path = args.output or str(Path(__file__).parent / "report_phase2.md")
         phase2_path = str(Path(__file__).parent / "phase2_questions.json")
+        try:
+            contract_run = enforce_qa_benchmark_contract(
+                mode="phase2",
+                dataset_path=phase2_path,
+                top_k=args.top_k,
+                doc_path_override_provided=bool(args.doc_path),
+                contract_path=args.contract,
+            )
+        except ContractValidationError as e:
+            logger.error(f"Benchmark contract validation failed: {e}")
+            raise SystemExit(2) from e
+        logger.info(
+            f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+        )
         run_phase2_evaluation(
             questions_path=phase2_path,
             doc_path=args.doc_path,
             top_k=args.top_k,
             output_path=output_path,
             enable_rerank=args.rerank_force,  # Only enable if forced
-            rerank_force=args.rerank_force
+            rerank_force=args.rerank_force,
+            contract=contract_run,
         )
         return
     
     if args.rerank_ab:
         output_path = args.output or str(Path(__file__).parent / "report_rerank_ab.md")
+        try:
+            contract_run = enforce_qa_benchmark_contract(
+                mode="rerank_ab",
+                dataset_path=args.golden,
+                top_k=args.top_k,
+                doc_path_override_provided=bool(args.doc_path),
+                contract_path=args.contract,
+            )
+        except ContractValidationError as e:
+            logger.error(f"Benchmark contract validation failed: {e}")
+            raise SystemExit(2) from e
+        logger.info(
+            f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+        )
         run_ab_evaluation(
             golden_path=args.golden,
             doc_path=args.doc_path,
             top_k=args.top_k,
-            output_path=output_path
+            output_path=output_path,
+            contract=contract_run,
         )
         return
     
     if args.propagation_safety:
         output_path = args.output or str(Path(__file__).parent / "report_propagation_safety.md")
+        try:
+            contract_run = enforce_qa_benchmark_contract(
+                mode="propagation_safety",
+                dataset_path=args.golden,
+                top_k=args.top_k,
+                doc_path_override_provided=bool(args.doc_path),
+                contract_path=args.contract,
+            )
+        except ContractValidationError as e:
+            logger.error(f"Benchmark contract validation failed: {e}")
+            raise SystemExit(2) from e
+        logger.info(
+            f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+        )
         run_propagation_safety_evaluation(
             golden_path=args.golden,
             doc_path=args.doc_path,
             top_k=args.top_k,
-            output_path=output_path
+            output_path=output_path,
+            contract=contract_run,
         )
         return
     
     if args.track_like:
         track_path = str(Path(__file__).parent / "questions_tracklike.json")
         output_path = args.output or str(Path(__file__).parent / "report_tracklike.md")
+        try:
+            contract_run = enforce_qa_benchmark_contract(
+                mode="track_like",
+                dataset_path=track_path,
+                top_k=args.top_k,
+                doc_path_override_provided=bool(args.doc_path),
+                contract_path=args.contract,
+            )
+        except ContractValidationError as e:
+            logger.error(f"Benchmark contract validation failed: {e}")
+            raise SystemExit(2) from e
+        logger.info(
+            f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+        )
         run_tracklike_evaluation(
             questions_path=track_path,
             doc_path=args.doc_path,
             top_k=args.top_k,
-            output_path=output_path
+            output_path=output_path,
+            contract=contract_run,
         )
         return
     
     if args.finalboss:
         finalboss_path = str(Path(__file__).parent / "questions_finalboss.json")
         output_path = args.output or str(Path(__file__).parent / "report_finalboss.md")
+        try:
+            contract_run = enforce_qa_benchmark_contract(
+                mode="finalboss",
+                dataset_path=finalboss_path,
+                top_k=args.top_k,
+                doc_path_override_provided=False,
+                contract_path=args.contract,
+            )
+        except ContractValidationError as e:
+            logger.error(f"Benchmark contract validation failed: {e}")
+            raise SystemExit(2) from e
+        logger.info(
+            f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+        )
         run_finalboss_evaluation(
             questions_path=finalboss_path,
             top_k=args.top_k,
-            output_path=output_path
+            output_path=output_path,
+            contract=contract_run,
         )
         return
     
+    try:
+        contract_run = enforce_qa_benchmark_contract(
+            mode="standard",
+            dataset_path=args.golden,
+            top_k=args.top_k,
+            doc_path_override_provided=bool(args.doc_path),
+            contract_path=args.contract,
+        )
+    except ContractValidationError as e:
+        logger.error(f"Benchmark contract validation failed: {e}")
+        raise SystemExit(2) from e
+    logger.info(
+        f"Benchmark contract verified: {contract_run.contract_id} v{contract_run.contract_version}"
+    )
+
     report = run_evaluation(
         golden_path=args.golden,
         doc_path=args.doc_path,
         top_k=args.top_k,
-        output_path=args.output
+        output_path=args.output,
+        contract=contract_run,
     )
     
     # Print summary
@@ -2635,6 +2792,10 @@ def main():
     if report.figure_linkage_total > 0:
         print(f"Figure Linkage: {report.figure_linkage_pass}/{report.figure_linkage_total}")
     print(f"Total Time: {report.total_time_ms:.0f}ms")
+    if report.contract:
+        print(
+            f"Contract: {report.contract.contract_id} v{report.contract.contract_version} ({report.contract.contract_sha256[:12]}...)"
+        )
     print("=" * 60)
 
 

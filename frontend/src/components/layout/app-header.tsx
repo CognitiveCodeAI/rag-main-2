@@ -81,9 +81,14 @@ export function AppHeader({ onCommandOpen }: AppHeaderProps) {
         </BreadcrumbList>
       </Breadcrumb>
 
+      {/* Demo disclaimer */}
+      <span className="hidden lg:inline-flex text-xs text-muted-foreground/70 italic ml-3">
+        Demo UI — For RAG testing & demonstration only
+      </span>
+
       {/* Mobile title */}
       <span className="font-medium md:hidden">
-        {breadcrumbItems[breadcrumbItems.length - 1]?.label || "FDD"}
+        {breadcrumbItems[breadcrumbItems.length - 1]?.label || "NPR"}
       </span>
 
       {/* Spacer */}

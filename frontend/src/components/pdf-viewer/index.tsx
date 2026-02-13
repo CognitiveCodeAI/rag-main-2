@@ -239,99 +239,34 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
       cancelled = true;
     };
   }, [url, open, highlight?.page_no]);
-  
-  // Render current page
-  useEffect(() => {
-    if (!pdf || !canvasRef.current) return;
-    
-    const renderPage = async () => {
-      try {
-        const page = await pdf.getPage(currentPage);
-        const viewport = page.getViewport({ scale });
-        
-        const canvas = canvasRef.current!;
-        const context = canvas.getContext("2d")!;
-        
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-        
-        await page.render({
-          canvas,
-          canvasContext: context,
-          viewport,
-        }).promise;
-        
-        // Highlighting feature disabled for now - needs coordinate fixes
-        // Clear previous text highlights
-        setTextHighlights([]);
-        if (highlightRef.current) {
-          highlightRef.current.style.display = "none";
-        }
-        
-        /* HIGHLIGHTING DISABLED - TODO: Fix coordinate transformation
-        // Draw highlight if on current page
-        if (highlight && highlight.page_no === currentPage && highlight.bbox && highlight.page_size) {
-          // Calculate bbox coverage
-          const bboxWidth = highlight.bbox.x1 - highlight.bbox.x0;
-          const bboxHeight = highlight.bbox.y1 - highlight.bbox.y0;
-          const bboxArea = bboxWidth * bboxHeight;
-          const pageArea = highlight.page_size.width * highlight.page_size.height;
-          const coveragePercent = (bboxArea / pageArea) * 100;
-          
-          if (coveragePercent <= 50) {
-            // Precise bbox - use coordinate-based highlighting
-            drawHighlight(viewport, highlight.bbox, highlight.page_size);
-          } else if (highlight.anchor_snippet) {
-            // Imprecise bbox - use text search highlighting
-            if (highlightRef.current) {
-              highlightRef.current.style.display = "none";
-            }
-            const highlights = await findTextHighlights(page, viewport, highlight.anchor_snippet);
-            setTextHighlights(highlights);
-          } else {
-            // No anchor snippet - hide bbox highlight, will show section indicator
-            if (highlightRef.current) {
-              highlightRef.current.style.display = "none";
-            }
-          }
-        } else if (highlightRef.current) {
-          highlightRef.current.style.display = "none";
-        }
-        */
-      } catch (err) {
-        console.error("Failed to render page:", err);
-      }
-    };
-    
-    renderPage();
-  }, [pdf, currentPage, scale, highlight, findTextHighlights]);
-  
+
   // Draw bbox highlight overlay (only for precise highlights)
   const drawHighlight = useCallback((
     viewport: pdfjsLib.PageViewport,
-    bbox: CitationHighlight["bbox"],
-    pageSize: CitationHighlight["page_size"]
+    bbox: CitationHighlight["bbox"]
   ) => {
-    if (!bbox || !pageSize || !highlightRef.current) return;
-    
-    // Convert PDF coordinates to viewport coordinates
-    // Note: PDF uses bottom-left origin, HTML uses top-left origin
-    const scaleX = viewport.width / pageSize.width;
-    const scaleY = viewport.height / pageSize.height;
-    
+    if (!bbox || !highlightRef.current) return;
+
+    // Use viewport.viewBox for accurate PDF coordinate transformation
+    // viewBox = [x0, y0, x1, y1] in PDF points
+    const pdfWidth = viewport.viewBox[2] - viewport.viewBox[0];
+    const pdfHeight = viewport.viewBox[3] - viewport.viewBox[1];
+
+    const scaleX = viewport.width / pdfWidth;
+    const scaleY = viewport.height / pdfHeight;
+
     const x = bbox.x0 * scaleX;
     // Flip Y coordinate: PDF y=0 is at bottom, HTML y=0 is at top
-    const y = (pageSize.height - bbox.y1) * scaleY;
+    const y = (pdfHeight - bbox.y1) * scaleY;
     const width = (bbox.x1 - bbox.x0) * scaleX;
     const height = (bbox.y1 - bbox.y0) * scaleY;
-    
+
     // Calculate what percentage of the page this covers
-    const bboxArea = width * height;
-    const pageArea = viewport.width * viewport.height;
-    const coveragePercent = (bboxArea / pageArea) * 100;
-    
+    const bboxWidth = bbox.x1 - bbox.x0;
+    const bboxHeight = bbox.y1 - bbox.y0;
+    const coveragePercent = (bboxWidth * bboxHeight) / (pdfWidth * pdfHeight) * 100;
+
     // Only show bbox highlight for precise regions (<50% coverage)
-    // Full-page highlights are handled by the JSX section indicator
     if (coveragePercent <= 50) {
       highlightRef.current.style.left = `${x}px`;
       highlightRef.current.style.top = `${y}px`;
@@ -343,10 +278,68 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
       highlightRef.current.style.boxShadow = "0 0 0 4px rgba(250, 204, 21, 0.2)";
       highlightRef.current.style.display = "block";
     } else {
-      // Hide the dynamic highlight - section indicator in JSX handles this
       highlightRef.current.style.display = "none";
     }
   }, []);
+
+  // Render current page
+  useEffect(() => {
+    if (!pdf || !canvasRef.current) return;
+
+    const renderPage = async () => {
+      try {
+        const page = await pdf.getPage(currentPage);
+        const viewport = page.getViewport({ scale });
+
+        const canvas = canvasRef.current!;
+        const context = canvas.getContext("2d")!;
+
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        await page.render({
+          canvas,
+          canvasContext: context,
+          viewport,
+        }).promise;
+
+        // Clear previous highlights
+        setTextHighlights([]);
+        if (highlightRef.current) {
+          highlightRef.current.style.display = "none";
+        }
+
+        // Draw highlight if on current page
+        if (highlight && highlight.page_no === currentPage) {
+          if (highlight.bbox) {
+            // Calculate bbox coverage using viewport dimensions
+            const pdfWidth = viewport.viewBox[2] - viewport.viewBox[0];
+            const pdfHeight = viewport.viewBox[3] - viewport.viewBox[1];
+            const bboxWidth = highlight.bbox.x1 - highlight.bbox.x0;
+            const bboxHeight = highlight.bbox.y1 - highlight.bbox.y0;
+            const coveragePercent = (bboxWidth * bboxHeight) / (pdfWidth * pdfHeight) * 100;
+
+            if (coveragePercent <= 50) {
+              // Precise bbox - use coordinate-based highlighting
+              drawHighlight(viewport, highlight.bbox);
+            } else if (highlight.anchor_snippet) {
+              // Large bbox - fall back to text search highlighting
+              const highlights = await findTextHighlights(page, viewport, highlight.anchor_snippet);
+              setTextHighlights(highlights);
+            }
+          } else if (highlight.anchor_snippet) {
+            // No bbox but have anchor_snippet - use text search
+            const highlights = await findTextHighlights(page, viewport, highlight.anchor_snippet);
+            setTextHighlights(highlights);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to render page:", err);
+      }
+    };
+
+    renderPage();
+  }, [pdf, currentPage, scale, highlight, findTextHighlights, drawHighlight]);
   
   // Text search using anchor_snippet (fallback for page navigation)
   useEffect(() => {
@@ -450,12 +443,28 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, currentPage, numPages]);
   
-  // Calculate if bbox is a full-page or precise region
-  // Get highlight type badge - simplified since highlighting is disabled
+  // Get highlight type badge based on available data
   const getHighlightBadge = () => {
     if (!highlight) return null;
-    
-    // Highlighting disabled - just show page navigation badge
+
+    if (highlight.bbox) {
+      return (
+        <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/30">
+          <Target className="h-3 w-3 mr-1" />
+          Highlighted
+        </Badge>
+      );
+    }
+
+    if (highlight.anchor_snippet) {
+      return (
+        <Badge variant="secondary" className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30">
+          <MapPin className="h-3 w-3 mr-1" />
+          Text Match
+        </Badge>
+      );
+    }
+
     return (
       <Badge variant="secondary" className="bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30">
         <FileText className="h-3 w-3 mr-1" />
@@ -663,14 +672,13 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
                   className="shadow-xl rounded-sm bg-white"
                   style={{ maxWidth: "100%" }}
                 />
-                {/* HIGHLIGHTING DISABLED - TODO: Fix coordinate transformation
                 {/* Bbox highlight overlay - for precise coordinates */}
                 <div
                   ref={highlightRef}
                   className="absolute pointer-events-none transition-all duration-300"
                   style={{ display: "none" }}
                 />
-                {/* Text search highlight overlays - for matching anchor_snippet 
+                {/* Text search highlight overlays - for matching anchor_snippet */}
                 {textHighlights.map((rect, i) => (
                   <div
                     key={i}
@@ -680,21 +688,9 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
                       top: `${rect.y}px`,
                       width: `${rect.width}px`,
                       height: `${rect.height}px`,
-                      animation: "pulse 2s ease-in-out infinite",
                     }}
                   />
                 ))}
-                */}
-                {/* Source section indicator bar - also disabled
-                {highlight && highlight.page_no === currentPage && !isBboxPrecise() && textHighlights.length === 0 && (
-                  <div 
-                    className="absolute left-0 top-0 bottom-0 w-2 bg-gradient-to-b from-amber-400 via-yellow-500 to-amber-400 rounded-r-md shadow-[0_0_12px_rgba(234,179,8,0.6)] z-10"
-                    style={{ 
-                      animation: "pulse 2s ease-in-out infinite",
-                    }}
-                  />
-                )}
-                */}
               </div>
             )}
           </div>

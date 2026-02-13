@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field
 from app.db.session import session_scope
 from app.db.models import EmbeddingJob
 from app.db.graph_models import DocumentGraph, Node
+from app.services.document_identity import resolve_for_embed
+from app.services.worker_health import inspect_celery_workers
+from app.storage.minio_client import get_storage_client
 from app.tasks.embed_nodes import embed_nodes_task
 
 router = APIRouter(prefix="/v1/embed", tags=["embedding"])
@@ -64,48 +67,32 @@ async def embed_document(request: EmbedDocumentRequest) -> EmbedDocumentResponse
     Returns:
         Job tracking info
     """
-    # Parse version_id - it could be "v20240101-abc123" or just "1"
-    # Graph pipeline uses integer versions
-    try:
-        version = int(request.version_id)
-    except ValueError:
-        # Default to version 1 if version_id is not an integer
-        version = 1
-    
-    # Verify document and nodes exist in graph
-    # Handle doc_id mapping: legacy pipeline may use different doc_id than graph
-    actual_doc_id = request.doc_id
-    
+    # Resolve request identity to canonical graph doc/version.
     with session_scope() as session:
+        resolved = resolve_for_embed(
+            session,
+            requested_doc_id=request.doc_id,
+            requested_version_id=request.version_id,
+        )
+        if not resolved:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document not found: {request.doc_id} version {request.version_id}. "
+                       "Ingest the document first."
+            )
+        actual_doc_id = resolved.graph_doc_id
+        version = resolved.graph_version
+
         doc = session.query(DocumentGraph).filter(
-            DocumentGraph.doc_id == request.doc_id,
+            DocumentGraph.doc_id == actual_doc_id,
             DocumentGraph.version == version
         ).first()
-        
-        if not doc:
-            # Try to find by source_uri via legacy Document table
-            from app.db.models import Document as LegacyDocument
-            legacy_doc = session.query(LegacyDocument).filter(
-                LegacyDocument.doc_id == request.doc_id
-            ).first()
-            
-            if legacy_doc:
-                # Find graph document by source_uri
-                doc = session.query(DocumentGraph).filter(
-                    DocumentGraph.source_uri == legacy_doc.source_uri,
-                    DocumentGraph.version == version
-                ).first()
-                
-                if doc:
-                    actual_doc_id = doc.doc_id
-        
         if not doc:
             raise HTTPException(
                 status_code=404,
-                detail=f"Document not found: {request.doc_id} version {version}. "
-                       "Ingest the document first."
+                detail=f"Document not found: {actual_doc_id} version {version}. Ingest the document first."
             )
-        
+
         node_count = session.query(Node).filter(
             Node.doc_id == actual_doc_id,
             Node.version == version
@@ -117,12 +104,22 @@ async def embed_document(request: EmbedDocumentRequest) -> EmbedDocumentResponse
                 detail=f"No nodes found for {actual_doc_id} version {version}. "
                        "Ingest the document first."
             )
-    
+
+    worker_status = inspect_celery_workers(timeout=1.0)
+    if not worker_status.healthy:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Embedding queue is unavailable. "
+                f"{worker_status.message} Start a Celery worker and retry."
+            ),
+        )
+
     # Create embedding job record
     with session_scope() as session:
         job = EmbeddingJob(
-            doc_id=request.doc_id,
-            version_id=request.version_id,
+            doc_id=actual_doc_id,
+            version_id=str(version),
             status="pending",
         )
         session.add(job)
@@ -134,8 +131,8 @@ async def embed_document(request: EmbedDocumentRequest) -> EmbedDocumentResponse
     
     return EmbedDocumentResponse(
         job_id=job_id,
-        doc_id=actual_doc_id,  # Return actual graph doc_id
-        version_id=request.version_id,
+        doc_id=actual_doc_id,
+        version_id=str(version),
         status="queued",
     )
 

@@ -15,8 +15,11 @@ import time
 import uuid
 import pytest
 import requests
+import fitz
 
 BASE_URL = os.environ.get("NPR_BASE_URL", "http://localhost:8000")
+
+_SUPPORTED_TYPES = None
 
 # Unique canary strings — if these leak, ACL is broken
 CANARY_PUBLIC = f"CANARY_PUBLIC_WATER_QUALITY_{uuid.uuid4().hex[:8]}"
@@ -48,29 +51,76 @@ def _headers(tenant_id, user_id, roles=None, groups=None):
 def _create_test_file(content: str, filename: str) -> str:
     """Write a temp test file and return its path."""
     path = os.path.join(os.environ.get("TEMP", "/tmp"), filename)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return path
+
+
+def _get_supported_types() -> set[str]:
+    """Discover backend-supported file types from health endpoint."""
+    global _SUPPORTED_TYPES
+    if _SUPPORTED_TYPES is not None:
+        return _SUPPORTED_TYPES
+
+    try:
+        resp = requests.get(f"{BASE_URL}/health")
+        resp.raise_for_status()
+        raw = resp.json().get("features", {}).get("supported_file_types", [])
+        _SUPPORTED_TYPES = {str(v).lower() for v in raw}
+    except Exception:
+        _SUPPORTED_TYPES = {"pdf"}
+    return _SUPPORTED_TYPES
+
+
+def _text_file_to_pdf_bytes(path: str) -> bytes:
+    """Convert a UTF-8 text file to a one-page PDF for ingestion fallback."""
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    doc = fitz.open()
+    try:
+        page = doc.new_page()
+        page.insert_textbox(
+            fitz.Rect(36, 36, page.rect.width - 36, page.rect.height - 36),
+            text,
+            fontsize=11,
+        )
+        return doc.tobytes()
+    finally:
+        doc.close()
 
 
 def _ingest_document(filepath, filename, tenant_id, visibility,
                      allowed_roles=None, allowed_groups=None, allowed_users=None):
     """Ingest a document via the API with ACL metadata."""
-    with open(filepath, "rb") as f:
-        files = {"file": (filename, f, "text/plain")}
-        data = {
-            "source_type": "txt",
-            "tenant_id": tenant_id,
-            "visibility": visibility,
-        }
-        if allowed_roles:
-            data["allowed_roles"] = json.dumps(allowed_roles)
-        if allowed_groups:
-            data["allowed_groups"] = json.dumps(allowed_groups)
-        if allowed_users:
-            data["allowed_users"] = json.dumps(allowed_users)
+    supported = _get_supported_types()
+    data = {
+        "tenant_id": tenant_id,
+        "visibility": visibility,
+    }
+    if allowed_roles:
+        data["allowed_roles"] = json.dumps(allowed_roles)
+    if allowed_groups:
+        data["allowed_groups"] = json.dumps(allowed_groups)
+    if allowed_users:
+        data["allowed_users"] = json.dumps(allowed_users)
 
+    if "txt" in supported:
+        with open(filepath, "rb") as f:
+            files = {"file": (filename, f, "text/plain")}
+            data["source_type"] = "txt"
+            resp = requests.post(f"{BASE_URL}/v1/ingest/document", files=files, data=data)
+    elif "pdf" in supported:
+        pdf_filename = f"{os.path.splitext(filename)[0]}.pdf"
+        pdf_bytes = _text_file_to_pdf_bytes(filepath)
+        files = {"file": (pdf_filename, pdf_bytes, "application/pdf")}
+        data["source_type"] = "pdf"
         resp = requests.post(f"{BASE_URL}/v1/ingest/document", files=files, data=data)
+    else:
+        raise RuntimeError(
+            f"No compatible upload type for ACL E2E. Supported types: {sorted(supported)}"
+        )
+
     resp.raise_for_status()
     return resp.json()
 

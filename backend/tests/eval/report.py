@@ -25,11 +25,17 @@ from tests.eval.run_eval import (
     run_evaluation,
     EvalSummary,
 )
+from tests.eval.benchmark_contract import (
+    ContractRunInfo,
+    ContractValidationError,
+    enforce_retrieval_benchmark_contract,
+)
 
 
 def generate_markdown_report(
     graph_summary: EvalSummary,
     baseline_summary: EvalSummary,
+    contract: Optional[ContractRunInfo] = None,
 ) -> str:
     """Generate markdown comparison report."""
     
@@ -38,11 +44,24 @@ def generate_markdown_report(
         "",
         f"Generated: {datetime.now().isoformat()}",
         "",
-        "## Summary",
-        "",
-        "| Metric | Baseline (Vector-Only) | Graph-Expanded | Improvement |",
-        "|--------|------------------------|----------------|-------------|",
     ]
+    if contract:
+        lines.extend(
+            [
+                f"Contract: `{contract.contract_id}` v{contract.contract_version}",
+                f"Contract SHA256: `{contract.contract_sha256}`",
+                f"Contract File: `{contract.contract_path}`",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            "| Metric | Baseline (Vector-Only) | Graph-Expanded | Improvement |",
+            "|--------|------------------------|----------------|-------------|",
+        ]
+    )
     
     # Recall metrics
     metrics = [
@@ -102,6 +121,7 @@ def generate_markdown_report(
 def generate_html_report(
     graph_summary: EvalSummary,
     baseline_summary: EvalSummary,
+    contract: Optional[ContractRunInfo] = None,
 ) -> str:
     """Generate HTML comparison report."""
     
@@ -137,6 +157,14 @@ def generate_html_report(
                Recall@5: {'✅' if result.evidence_recall_at_5 else '❌'} |
                Keywords: {result.keyword_hit_rate:.0%}</p>
         </div>"""
+
+    contract_html = ""
+    if contract:
+        contract_html = (
+            f"<p><strong>Contract:</strong> {contract.contract_id} v{contract.contract_version}<br/>"
+            f"<strong>Contract SHA256:</strong> {contract.contract_sha256}<br/>"
+            f"<strong>Contract File:</strong> {contract.contract_path}</p>"
+        )
     
     return f"""<!DOCTYPE html>
 <html>
@@ -154,6 +182,7 @@ def generate_html_report(
 <body>
     <h1>📊 Graph RAG Evaluation Report</h1>
     <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    {contract_html}
     
     <h2>Summary Metrics</h2>
     <table>
@@ -175,6 +204,7 @@ def generate_html_report(
 def generate_json_report(
     graph_summary: EvalSummary,
     baseline_summary: EvalSummary,
+    contract: Optional[ContractRunInfo] = None,
 ) -> str:
     """Generate JSON report for programmatic use."""
     
@@ -197,6 +227,12 @@ def generate_json_report(
     
     report = {
         "generated_at": datetime.now().isoformat(),
+        "contract": {
+            "contract_id": contract.contract_id,
+            "contract_version": contract.contract_version,
+            "contract_sha256": contract.contract_sha256,
+            "contract_path": contract.contract_path,
+        } if contract else None,
         "baseline": summary_to_dict(baseline_summary, "vector_only"),
         "graph_expanded": summary_to_dict(graph_summary, "graph_expanded"),
         "improvement": {
@@ -225,28 +261,40 @@ def main():
     parser.add_argument("--format", "-f", choices=["md", "html", "json"], default="md",
                        help="Output format")
     parser.add_argument("--output", "-o", help="Output file (without extension)")
+    parser.add_argument(
+        "--contract",
+        default=str(Path(__file__).parent / "benchmark_contract.json"),
+        help="Path to benchmark contract JSON",
+    )
     
     args = parser.parse_args()
     
     print("Running evaluations...")
+    try:
+        contract_run = enforce_retrieval_benchmark_contract(
+            query_subset_requested=False,
+            contract_path=args.contract,
+        )
+    except ContractValidationError as e:
+        raise SystemExit(f"Benchmark contract validation failed: {e}") from e
     
     # Run baseline (vector-only)
     baseline_retriever = MockRetriever(use_graph_expansion=False)
-    baseline_summary = run_evaluation(baseline_retriever)
+    baseline_summary = run_evaluation(baseline_retriever, contract=contract_run)
     
     # Run graph-expanded
     graph_retriever = MockRetriever(use_graph_expansion=True)
-    graph_summary = run_evaluation(graph_retriever)
+    graph_summary = run_evaluation(graph_retriever, contract=contract_run)
     
     # Generate report
     if args.format == "md":
-        report = generate_markdown_report(graph_summary, baseline_summary)
+        report = generate_markdown_report(graph_summary, baseline_summary, contract=contract_run)
         ext = ".md"
     elif args.format == "html":
-        report = generate_html_report(graph_summary, baseline_summary)
+        report = generate_html_report(graph_summary, baseline_summary, contract=contract_run)
         ext = ".html"
     else:
-        report = generate_json_report(graph_summary, baseline_summary)
+        report = generate_json_report(graph_summary, baseline_summary, contract=contract_run)
         ext = ".json"
     
     # Output

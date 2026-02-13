@@ -1,6 +1,7 @@
 """Documents API routes for listing and browsing documents."""
 
 import logging
+import mimetypes
 import os
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +18,11 @@ from app.acl.models import DocumentACL, Entitlements
 from app.acl.postgres_filter import ACLPostgresFilter
 from app.config import get_settings
 from app.db.session import get_session
-from app.db.graph_models import DocumentGraph, Node, Edge, NodeType, EdgeType
+from app.db.models import Document, IngestJob, DocumentIR, Chunk, VectorIndexVersion, EmbeddingJob
+from app.db.graph_models import DocumentGraph, Node, Edge, NodeType, EdgeType, ContentRegistry
+from app.services.document_identity import find_legacy_for_graph
 from app.storage.minio_client import get_storage_client
+from app.graph.vector_index import GraphVectorIndex
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,9 @@ class DocumentResponse(BaseModel):
     supersedes_doc_id: Optional[str] = None
     node_count: Optional[int] = None
     visibility: Optional[str] = None
+    processing_status: Optional[str] = None
+    processing_stage: Optional[str] = None
+    processing_error: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -148,6 +155,14 @@ def _check_doc_access(
         raise HTTPException(status_code=403, detail="Access denied")
 
 
+def _infer_media_type(filename: str, explicit_content_type: Optional[str]) -> str:
+    """Best-effort media type resolution for raw document responses."""
+    if explicit_content_type:
+        return explicit_content_type
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or "application/octet-stream"
+
+
 # ============================================
 # Routes
 # ============================================
@@ -199,10 +214,24 @@ async def list_documents(
             Node.doc_id, func.count(Node.node_id)
         ).filter(Node.doc_id.in_(doc_ids)).group_by(Node.doc_id).all()
         node_counts = {doc_id: count for doc_id, count in counts}
+
+    # Get latest embedding job per document for processing status/error visibility
+    latest_embed_by_doc: dict[str, EmbeddingJob] = {}
+    if doc_ids:
+        embed_jobs = (
+            db.query(EmbeddingJob)
+            .filter(EmbeddingJob.doc_id.in_(doc_ids))
+            .order_by(EmbeddingJob.doc_id.asc(), EmbeddingJob.created_at.desc())
+            .all()
+        )
+        for job in embed_jobs:
+            if job.doc_id and job.doc_id not in latest_embed_by_doc:
+                latest_embed_by_doc[job.doc_id] = job
     
     # Build response
     items = []
     for doc in documents:
+        latest_embed = latest_embed_by_doc.get(doc.doc_id)
         item = DocumentResponse(
             doc_id=doc.doc_id,
             source_uri=doc.source_uri,
@@ -224,6 +253,9 @@ async def list_documents(
             supersedes_doc_id=doc.supersedes_doc_id,
             node_count=node_counts.get(doc.doc_id, 0),
             visibility=doc.visibility,
+            processing_status=latest_embed.status if latest_embed else None,
+            processing_stage=latest_embed.pipeline_stage if latest_embed else None,
+            processing_error=latest_embed.error if latest_embed else None,
         )
         items.append(item)
     
@@ -302,6 +334,12 @@ async def get_document(
     
     # Get node count
     node_count = db.query(func.count(Node.node_id)).filter(Node.doc_id == doc_id).scalar() or 0
+    latest_embed = (
+        db.query(EmbeddingJob)
+        .filter(EmbeddingJob.doc_id == doc_id)
+        .order_by(desc(EmbeddingJob.created_at))
+        .first()
+    )
     
     return DocumentResponse(
         doc_id=doc.doc_id,
@@ -324,6 +362,9 @@ async def get_document(
         supersedes_doc_id=doc.supersedes_doc_id,
         node_count=node_count,
         visibility=doc.visibility,
+        processing_status=latest_embed.status if latest_embed else None,
+        processing_stage=latest_embed.pipeline_stage if latest_embed else None,
+        processing_error=latest_embed.error if latest_embed else None,
     )
 
 
@@ -449,16 +490,14 @@ async def get_raw_document(
     db: Session = Depends(get_session),
     entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> Response:
-    """Get raw PDF document bytes for viewing/highlighting.
+    """Get raw document bytes for viewing/highlighting.
 
     This endpoint enables the frontend PDF viewer to load and display
     the original document for citation highlighting.
 
     Returns:
-        PDF file as bytes with appropriate content-type
+        Raw file bytes with the best available content-type
     """
-    from app.db.models import Document as LegacyDocument
-
     # 1. Look up document
     doc = db.query(DocumentGraph).filter(DocumentGraph.doc_id == doc_id).first()
 
@@ -468,9 +507,10 @@ async def get_raw_document(
     # ACL check — raw document access is the "often-missed" vulnerability
     _check_doc_access(doc, entitlements)
     
-    # 2. Try to get PDF bytes
-    pdf_bytes = None
-    filename = "document.pdf"
+    # 2. Try to get raw file bytes
+    raw_bytes = None
+    filename = "document.bin"
+    content_type: Optional[str] = None
     
     # Strategy 1: Try local file path (for file:// URIs)
     if doc.source_uri and doc.source_uri.startswith("file://"):
@@ -478,67 +518,181 @@ async def get_raw_document(
         if os.path.exists(file_path):
             try:
                 with open(file_path, "rb") as f:
-                    pdf_bytes = f.read()
+                    raw_bytes = f.read()
                 filename = Path(file_path).name
-                logger.info(f"[{doc_id}] Loaded PDF from local file: {file_path}")
+                content_type = _infer_media_type(filename, None)
+                logger.info(f"[{doc_id}] Loaded raw file from local path: {file_path}")
             except Exception as e:
                 logger.warning(f"[{doc_id}] Failed to read local file: {e}")
     
     # Strategy 2: Try MinIO storage with graph doc_id
-    if pdf_bytes is None:
+    if raw_bytes is None:
         try:
             storage = get_storage_client()
             raw_files = storage.list_raw_files(doc_id, str(doc.version))
             if raw_files:
                 filename = raw_files[0]
-                pdf_bytes = storage.get_raw(doc_id, str(doc.version), filename)
-                logger.info(f"[{doc_id}] Loaded PDF from MinIO: {filename}")
+                raw_bytes, content_type = storage.get_raw_with_content_type(
+                    doc_id,
+                    str(doc.version),
+                    filename,
+                )
+                logger.info(f"[{doc_id}] Loaded raw file from MinIO (graph identity): {filename}")
         except Exception as e:
             logger.warning(f"[{doc_id}] Failed to get from MinIO with graph doc_id: {e}")
     
-    # Strategy 3: Try MinIO via legacy Document mapping (for upload:// URIs)
-    # Files uploaded via UI are stored under the legacy doc_id, not graph doc_id
-    if pdf_bytes is None and doc.source_uri:
+    # Strategy 3: Try MinIO via explicit legacy mapping (preferred for uploads)
+    if raw_bytes is None:
         try:
-            legacy_doc = db.query(LegacyDocument).filter(
-                LegacyDocument.source_uri == doc.source_uri
-            ).first()
-            
+            legacy_doc = find_legacy_for_graph(db, doc.doc_id, doc.version)
+            if not legacy_doc and doc.source_uri:
+                legacy_doc = db.query(Document).filter(Document.source_uri == doc.source_uri).first()
             if legacy_doc:
                 storage = get_storage_client()
-                upload_filename = doc.source_uri.replace("upload://", "") if doc.source_uri.startswith("upload://") else None
-                
-                if upload_filename:
-                    pdf_bytes = storage.get_raw(legacy_doc.doc_id, legacy_doc.version_id, upload_filename)
-                    filename = upload_filename
-                    logger.info(f"[{doc_id}] Loaded PDF from MinIO via legacy mapping: {legacy_doc.doc_id}/{legacy_doc.version_id}/{filename}")
+                raw_files = storage.list_raw_files(legacy_doc.doc_id, legacy_doc.version_id)
+                if raw_files:
+                    filename = raw_files[0]
+                    raw_bytes, stored_content_type = storage.get_raw_with_content_type(
+                        legacy_doc.doc_id,
+                        legacy_doc.version_id,
+                        filename,
+                    )
+                    content_type = legacy_doc.mime_type or stored_content_type
+                    logger.info(
+                        f"[{doc_id}] Loaded raw file via legacy mapping: "
+                        f"{legacy_doc.doc_id}/{legacy_doc.version_id}/{filename}"
+                    )
         except Exception as e:
             logger.warning(f"[{doc_id}] Failed to get from MinIO via legacy mapping: {e}")
     
     # Strategy 4: Try upload:// URI pattern directly with graph doc_id
-    if pdf_bytes is None and doc.source_uri and doc.source_uri.startswith("upload://"):
+    if raw_bytes is None and doc.source_uri and doc.source_uri.startswith("upload://"):
         upload_filename = doc.source_uri.replace("upload://", "")
         try:
             storage = get_storage_client()
-            pdf_bytes = storage.get_raw(doc_id, str(doc.version), upload_filename)
+            raw_bytes, content_type = storage.get_raw_with_content_type(
+                doc_id,
+                str(doc.version),
+                upload_filename,
+            )
             filename = upload_filename
-            logger.info(f"[{doc_id}] Loaded PDF from MinIO upload: {filename}")
+            logger.info(f"[{doc_id}] Loaded raw file from MinIO upload fallback: {filename}")
         except Exception as e:
             logger.warning(f"[{doc_id}] Failed to get upload from MinIO: {e}")
     
-    if pdf_bytes is None:
+    if raw_bytes is None:
         raise HTTPException(
             status_code=404, 
-            detail=f"Raw PDF not found for document {doc_id}. Source: {doc.source_uri}"
+            detail=f"Raw file not found for document {doc_id}. Source: {doc.source_uri}"
         )
     
-    # 3. Return PDF with appropriate headers for viewing
+    content_type = _infer_media_type(filename, content_type)
+
+    # 3. Return with type-aware headers
     return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
+        content=raw_bytes,
+        media_type=content_type,
         headers={
             "Content-Disposition": f'inline; filename="{filename}"',
             "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
             "Access-Control-Allow-Origin": "*",  # Allow CORS for frontend
         }
     )
+
+
+@router.delete("/{doc_id}", status_code=204)
+async def delete_document(
+    doc_id: str,
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> None:
+    """Delete a document and all associated data.
+
+    Removes data from:
+    - PostgreSQL (graph tables + legacy tables)
+    - Milvus (vector embeddings)
+    - MinIO (file artifacts)
+    - ContentRegistry (deduplication tracking)
+    """
+    # 1. Verify document exists and check ACL
+    doc = db.query(DocumentGraph).filter(DocumentGraph.doc_id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+    _check_doc_access(doc, entitlements)
+
+    version = doc.version
+    content_hash = doc.content_hash
+    source_uri = doc.source_uri
+
+    # 2. Delete from Milvus (all collection versions)
+    for coll_version in ["v1", "v2", "v3"]:
+        try:
+            vector_index = GraphVectorIndex(collection_version=coll_version)
+            vector_index.delete_by_doc(doc_id, version)
+        except Exception as e:
+            logger.warning(f"[{doc_id}] Milvus {coll_version} delete: {e}")
+
+    # 3. Delete from MinIO
+    storage = get_storage_client()
+    try:
+        storage.delete_document(doc_id, str(version))
+    except Exception as e:
+        logger.warning(f"[{doc_id}] MinIO delete: {e}")
+
+    # 4. Delete legacy tables (prefer explicit graph identity mapping)
+    legacy_doc = find_legacy_for_graph(db, doc_id, version)
+    if not legacy_doc:
+        legacy_doc = db.query(Document).filter(Document.source_uri == source_uri).first()
+
+    # Always clean graph-keyed background job/index rows.
+    db.query(VectorIndexVersion).filter(
+        VectorIndexVersion.doc_id == doc_id,
+        VectorIndexVersion.version_id == str(version),
+    ).delete()
+    db.query(EmbeddingJob).filter(EmbeddingJob.doc_id == doc_id).delete()
+    db.query(IngestJob).filter(
+        IngestJob.graph_doc_id == doc_id,
+        IngestJob.graph_version == version,
+    ).delete()
+
+    if legacy_doc:
+        legacy_id = legacy_doc.doc_id
+        db.query(VectorIndexVersion).filter(VectorIndexVersion.doc_id == legacy_id).delete()
+        db.query(EmbeddingJob).filter(EmbeddingJob.doc_id == legacy_id).delete()
+        db.query(Chunk).filter(Chunk.doc_id == legacy_id).delete()
+        db.query(DocumentIR).filter(DocumentIR.doc_id == legacy_id).delete()
+        db.query(IngestJob).filter(IngestJob.doc_id == legacy_id).delete()
+        db.delete(legacy_doc)
+        # Also clean MinIO with legacy doc_id
+        try:
+            storage.delete_document(legacy_id, legacy_doc.version_id)
+        except Exception:
+            pass
+
+    # 5. Delete DocumentGraph (CASCADE deletes nodes + edges)
+    db.delete(doc)
+
+    # 6. Update ContentRegistry
+    registry = db.query(ContentRegistry).filter(
+        ContentRegistry.content_hash == content_hash
+    ).first()
+    if registry:
+        if registry.canonical_doc_id == doc_id:
+            if registry.alias_count <= 1:
+                db.delete(registry)
+            else:
+                # Find another doc with same content to become canonical
+                other = db.query(DocumentGraph).filter(
+                    DocumentGraph.content_hash == content_hash,
+                    DocumentGraph.doc_id != doc_id
+                ).first()
+                if other:
+                    registry.canonical_doc_id = other.doc_id
+                    registry.alias_count -= 1
+                else:
+                    db.delete(registry)
+        else:
+            registry.alias_count = max(1, registry.alias_count - 1)
+
+    db.commit()
+    logger.info(f"[{doc_id}] Document deleted successfully")

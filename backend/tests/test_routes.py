@@ -7,7 +7,7 @@ Tests cover:
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -76,7 +76,7 @@ class TestIngestValidation:
             files={"file": ("test.xyz", b"test content", "application/octet-stream")},
             data={"source_type": "xyz"}
         )
-        assert response.status_code == 400
+        assert response.status_code == 415
         assert "unsupported" in response.json().get("detail", "").lower()
     
     def test_invalid_job_id_format(self):
@@ -97,16 +97,47 @@ class TestIngestValidation:
         response = client.get("/v1/ingest/document/nonexistent-doc-id/versions")
         assert response.status_code == 404
 
+    @patch("app.routes.ingest.fitz.open")
+    @patch("app.routes.ingest.inspect_celery_workers")
+    def test_ingest_rejected_when_worker_unavailable(self, mock_worker_status, mock_fitz_open):
+        """Ingestion should fail fast when no Celery workers are responding."""
+        from app.services.worker_health import CeleryWorkerStatus
+
+        mock_fitz_open.return_value.__enter__.return_value = MagicMock()
+        mock_worker_status.return_value = CeleryWorkerStatus(
+            healthy=False,
+            worker_count=0,
+            message="No Celery workers responded to ping.",
+        )
+
+        response = client.post(
+            "/v1/ingest/document",
+            files={"file": ("test.pdf", b"%PDF-1.4 test content", "application/pdf")},
+        )
+
+        assert response.status_code == 503
+        assert "queue is unavailable" in response.json().get("detail", "").lower()
+
 
 class TestIngestSuccess:
     """Test successful ingestion scenarios."""
     
+    @patch("app.routes.ingest.fitz.open")
+    @patch("app.routes.ingest.inspect_celery_workers")
     @patch("app.routes.ingest.ingest_document_task")
     @patch("app.routes.ingest.get_storage_client")
-    def test_pdf_ingestion_success(self, mock_storage, mock_task):
+    def test_pdf_ingestion_success(self, mock_storage, mock_task, mock_worker_status, mock_fitz_open):
         """PDF upload should succeed and return job info."""
+        from app.services.worker_health import CeleryWorkerStatus
+
         mock_storage.return_value = MagicMock()
         mock_task.delay = MagicMock()
+        mock_fitz_open.return_value.__enter__.return_value = MagicMock()
+        mock_worker_status.return_value = CeleryWorkerStatus(
+            healthy=True,
+            worker_count=1,
+            message="1 Celery worker responding.",
+        )
         
         pdf_content = b"%PDF-1.4 test content"
         
@@ -125,12 +156,22 @@ class TestIngestSuccess:
         # Verify task was queued
         mock_task.delay.assert_called_once()
     
+    @patch("app.routes.ingest.fitz.open")
+    @patch("app.routes.ingest.inspect_celery_workers")
     @patch("app.routes.ingest.ingest_document_task")
     @patch("app.routes.ingest.get_storage_client")
-    def test_custom_doc_id_respected(self, mock_storage, mock_task):
+    def test_custom_doc_id_respected(self, mock_storage, mock_task, mock_worker_status, mock_fitz_open):
         """Custom doc_id should be used when provided."""
+        from app.services.worker_health import CeleryWorkerStatus
+
         mock_storage.return_value = MagicMock()
         mock_task.delay = MagicMock()
+        mock_fitz_open.return_value.__enter__.return_value = MagicMock()
+        mock_worker_status.return_value = CeleryWorkerStatus(
+            healthy=True,
+            worker_count=1,
+            message="1 Celery worker responding.",
+        )
         
         response = client.post(
             "/v1/ingest/document",
@@ -141,6 +182,118 @@ class TestIngestSuccess:
         assert response.status_code == 200
         assert response.json()["doc_id"] == "custom-doc-id-123"
 
+    @patch("app.routes.ingest.fitz.open")
+    @patch("app.routes.ingest.get_storage_client")
+    @patch("app.routes.ingest.MetadataExtractor.extract")
+    def test_metadata_preview_success(self, mock_extract, mock_storage, mock_fitz_open):
+        """Metadata preview endpoint should stage file and return extracted metadata."""
+        from app.metadata.extractor import ExtractedMetadata
+
+        mock_storage.return_value = MagicMock()
+        mock_fitz_open.return_value.__enter__.return_value = MagicMock()
+        mock_extract.return_value = ExtractedMetadata(
+            year=2025,
+            doc_type="policy",
+            department="legal",
+            authority_tier=1,
+            provenance={
+                "year": "filename",
+                "doc_type": "filename",
+                "department": "filename",
+                "authority_tier": "derived",
+            },
+            confidence={
+                "year": 0.8,
+                "doc_type": 0.8,
+                "department": 0.8,
+                "authority_tier": 0.7,
+            },
+        )
+
+        response = client.post(
+            "/v1/ingest/metadata-preview",
+            files={"file": ("policy.pdf", b"%PDF-1.4 test content", "application/pdf")},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "preview_id" in data
+        assert data["filename"] == "policy.pdf"
+        assert data["metadata_extracted"]["doc_type"] == "policy"
+        assert data["metadata_extracted"]["department"] == "legal"
+
+    @patch("app.routes.ingest.fitz.open")
+    @patch("app.routes.ingest.inspect_celery_workers")
+    @patch("app.routes.ingest.ingest_document_task")
+    @patch("app.routes.ingest.get_storage_client")
+    def test_process_preview_queues_ingestion_with_metadata_overrides(
+        self,
+        mock_storage,
+        mock_task,
+        mock_worker_status,
+        mock_fitz_open,
+    ):
+        """Process endpoint should enqueue ingest task using staged preview + overrides."""
+        from app.db.models import IngestPreview
+        from app.db.session import session_scope
+        from app.services.worker_health import CeleryWorkerStatus
+
+        mock_fitz_open.return_value.__enter__.return_value = MagicMock()
+        storage_client = MagicMock()
+        storage_client.get_raw.return_value = b"%PDF-1.4 staged content"
+        mock_storage.return_value = storage_client
+        mock_task.delay = MagicMock()
+        mock_worker_status.return_value = CeleryWorkerStatus(
+            healthy=True,
+            worker_count=1,
+            message="1 Celery worker responding.",
+        )
+
+        preview_uuid = uuid.uuid4()
+        with session_scope() as session:
+            session.add(
+                IngestPreview(
+                    preview_id=preview_uuid,
+                    filename="staged.pdf",
+                    source_type="pdf",
+                    mime_type="application/pdf",
+                    preview_doc_id=f"preview-{preview_uuid.hex}",
+                    preview_version_id="v-preview",
+                    checksum=uuid.uuid4().hex,
+                    metadata_extracted={
+                        "doc_type": "policy",
+                        "department": "legal",
+                    },
+                    metadata_provenance={
+                        "doc_type": "filename",
+                        "department": "filename",
+                    },
+                    metadata_confidence={
+                        "doc_type": 0.8,
+                        "department": 0.8,
+                    },
+                    status="ready",
+                    expires_at=datetime.utcnow() + timedelta(minutes=30),
+                )
+            )
+
+        response = client.post(
+            "/v1/ingest/process",
+            json={
+                "preview_id": str(preview_uuid),
+                "metadata_overrides": {"department": "engineering"},
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "pending"
+        assert "job_id" in data
+
+        mock_task.delay.assert_called_once()
+        _, kwargs = mock_task.delay.call_args
+        assert kwargs["metadata_overrides"] == {"department": "engineering"}
+
 
 # =============================================================================
 # QA API TESTS
@@ -150,12 +303,12 @@ class TestQAValidation:
     """Test /v1/qa endpoint validation."""
     
     def test_missing_doc_id(self):
-        """Missing doc_id should fail validation."""
+        """Missing doc_id is allowed (query can run across all docs)."""
         response = client.post(
             "/v1/qa/ask",
             json={"question": "What is the fee?"}
         )
-        assert response.status_code == 422  # Pydantic validation error
+        assert response.status_code == 200
     
     def test_missing_question(self):
         """Missing question should fail validation."""
@@ -361,12 +514,48 @@ class TestRetrieveValidation:
 
 class TestEmbedValidation:
     """Test /v1/embed endpoint validation."""
-    
+
     def test_embed_job_invalid_uuid(self):
         """Invalid job UUID should return 400."""
         response = client.get("/v1/embed/job/not-a-uuid")
         # May return 404 or 400 depending on implementation
         assert response.status_code in [400, 404, 422]
+
+
+class TestEmbedSuccess:
+    """Test successful embed scenarios."""
+
+    @patch("app.routes.embed.get_storage_client")
+    def test_get_document_embed_status_success(self, mock_storage):
+        """Test embed status endpoint when bundle exists."""
+        mock_client = MagicMock()
+        mock_storage.return_value = mock_client
+        mock_client.get_embeddings.return_value = {
+            "bundle_version": "1.0",
+            "record_count": 42,
+            "model_id": "text-embedding-3-small",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        response = client.get("/v1/embed/document/test-doc/1/status")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["bundle_exists"] is True
+        assert data["doc_id"] == "test-doc"
+        assert data["version_id"] == "1"
+        assert data["bundle_info"]["bundle_version"] == "1.0"
+        assert data["bundle_info"]["record_count"] == 42
+
+    @patch("app.routes.embed.get_storage_client")
+    def test_get_document_embed_status_no_bundle(self, mock_storage):
+        """Test embed status endpoint when bundle does not exist."""
+        mock_client = MagicMock()
+        mock_storage.return_value = mock_client
+        mock_client.get_embeddings.side_effect = Exception("Not found")
+        response = client.get("/v1/embed/document/test-doc/1/status")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["bundle_exists"] is False
+        assert data["bundle_info"] is None
 
 
 # =============================================================================

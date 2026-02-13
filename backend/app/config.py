@@ -59,12 +59,16 @@ class Settings(BaseSettings):
     milvus_host: str = "localhost"
     milvus_port: int = 19530
     
-    # Ollama OCR settings
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_ocr_model: str = "deepseek-ocr:latest"
+    # OCR settings
+    ocr_provider: str = "openai"  # "openai" or "ollama"
+    ocr_openai_model: str = "gpt-5-mini"  # OpenAI vision model for OCR
     ocr_timeout: int = 120  # seconds for full page OCR
     ocr_region_timeout: int = 60  # seconds for region OCR
     ocr_max_retries: int = 3
+
+    # Ollama OCR settings (if ocr_provider="ollama")
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_ocr_model: str = "deepseek-ocr:latest"
     
     # Page extraction settings
     text_quality_threshold: float = 0.3  # Below this, use OCR

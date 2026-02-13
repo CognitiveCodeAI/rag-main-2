@@ -11,6 +11,7 @@ from app.acl.dependencies import get_entitlements
 from app.acl.models import Entitlements
 from app.db.session import get_session
 from app.qa.runner import QARunner
+from app.settings_service import get_runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class AskRequest(BaseModel):
     """Request body for ask endpoint."""
     doc_id: Optional[str] = Field(default=None, description="Document ID to query (optional - searches all documents if not provided)")
     question: str = Field(..., description="Question to answer")
-    top_k: int = Field(default=5, ge=1, le=20, description="Number of seed chunks to retrieve")
+    top_k: Optional[int] = Field(default=None, ge=1, le=50, description="Number of seed chunks to retrieve (uses runtime setting if not specified)")
     chat_history: Optional[List[ChatMessage]] = Field(default=None, description="Previous conversation history for context")
     mode: Literal["standard", "propagation_safety"] = Field(
         default="standard",
@@ -125,28 +126,37 @@ def ask_question(
     Returns a detailed audit trail of the entire process.
     """
     logger.info(f"[API] Ask: doc={request.doc_id}, mode={request.mode}, question={request.question[:50]}...")
-    
+
     try:
+        # Load runtime settings for defaults
+        runtime = get_runtime_settings(db)
+
+        # Use runtime settings for defaults when not explicitly specified
+        top_k = request.top_k if request.top_k is not None else runtime.retrieval_top_k
+
         # Build config dict for propagation_safety mode
         prop_safety_config = None
         if request.propagation_safety_config:
             prop_safety_config = request.propagation_safety_config.model_dump()
-        
+
         runner = QARunner(
             db=db,
             propagation_safety_config=prop_safety_config,
             entitlements=entitlements,
+            max_context_tokens=runtime.max_context_tokens,
+            enable_rerank=runtime.enable_reranking,
+            enable_llm_rewrite=runtime.enable_llm_query_rewrite,
         )
-        
+
         # Convert chat history to list of dicts for the runner
         chat_history = None
         if request.chat_history:
             chat_history = [{"role": msg.role, "content": msg.content} for msg in request.chat_history]
-        
+
         result = runner.run(
             doc_id=request.doc_id,
             question=request.question,
-            top_k=request.top_k,
+            top_k=top_k,
             mode=request.mode,
             chat_history=chat_history
         )

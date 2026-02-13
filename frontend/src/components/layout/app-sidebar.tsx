@@ -13,6 +13,7 @@ import {
   Settings,
   HelpCircle,
   Code2,
+  ExternalLink,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -93,20 +94,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Link href="/dashboard">
-                <div className="relative flex aspect-square size-8 items-center justify-center rounded-lg overflow-hidden">
+                <div className="relative flex aspect-square size-10 items-center justify-center shrink-0 bg-white rounded-full overflow-hidden">
                   <Image
                     src="/logo.png"
-                    alt="FDD Logo"
+                    alt="Cognitive Code™"
                     fill
-                    className="object-contain"
-                    sizes="32px"
+                    className="object-contain p-1.5"
+                    sizes="40px"
                   />
                 </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">FDD</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    Document Intelligence
-                  </span>
+                <div className="flex items-baseline text-left">
+                  <span className="font-semibold text-lg tracking-tight">Cognitive Code</span>
+                  <sup className="text-[10px] font-medium ml-0.5">™</sup>
                 </div>
               </Link>
             </SidebarMenuButton>
@@ -182,6 +181,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 Theme
               </span>
             </div>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <a
+              href="https://cognitivecode.ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-primary transition-colors group-data-[collapsible=icon]:justify-center"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span className="group-data-[collapsible=icon]:hidden">cognitivecode.ai</span>
+            </a>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

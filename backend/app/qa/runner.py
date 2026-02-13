@@ -2347,21 +2347,25 @@ Return JSON only in the following format:
             # 6. Section boosting
             total_pages = self._get_doc_total_pages(doc_id)
             section_boosted = self.section_booster.boost_results(
-                boosted.results,
-                normalized.detected_intent,
+                boosted.boosted_results,
+                sub_question.text,
                 total_pages
             )
             
             # 7. Seed injection (keep deterministic anchors)
             injection_targets = self._detect_structured_targets(sub_question.text)
-            if injection_targets:
-                section_boosted_results = self.inject_structured_seeds(
+            injected_seeds: List[InjectedSeed] = []
+            detected_targets_list: List[str] = []
+
+            if any(injection_targets.values()):
+                section_boosted_results, injected_seeds, detected_targets_list = self.inject_structured_seeds(
+                    sub_question.text,
+                    section_boosted.boosted_results,
                     doc_id,
-                    injection_targets,
-                    section_boosted.results
+                    top_k=config.subq_top_k
                 )
             else:
-                section_boosted_results = section_boosted.results
+                section_boosted_results = section_boosted.boosted_results
             
             # 8. Select top seeds
             top_seeds = section_boosted_results[:config.subq_top_k]
@@ -2414,7 +2418,9 @@ Return JSON only in the following format:
                 "expanded_count": len(all_expanded_nodes),
                 "snippet_count": len(packet.snippets),
                 "filter_expr": filter_expr,
-                "detected_intent": normalized.detected_intent
+                "detected_intent": normalized.detected_intent,
+                "injected_count": len(injected_seeds),
+                "detected_targets": detected_targets_list
             }
             
         except Exception as e:

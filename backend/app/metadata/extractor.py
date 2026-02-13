@@ -120,33 +120,39 @@ class MetadataExtractor:
         if filename is None:
             filename = Path(source_uri).name
         
-        # Open PDF
+        first_page_text = ""
+        pdf_doc = None
         try:
             pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         except Exception as e:
-            logger.warning(f"Failed to open PDF for metadata extraction: {e}")
-            return result
-        
+            logger.warning(
+                f"Failed to open document as PDF for metadata extraction; "
+                f"falling back to filename-only heuristics: {e}"
+            )
+
         try:
-            # 1. Extract from PDF metadata (highest priority)
-            self._extract_from_pdf_metadata(pdf_doc, result)
-            
-            # 2. Extract from filename
+            if pdf_doc is not None:
+                # 1. Extract from PDF metadata (highest priority)
+                self._extract_from_pdf_metadata(pdf_doc, result)
+
+            # 2. Extract from filename (works for all formats)
             self._extract_from_filename(filename, result)
-            
-            # 3. Extract from first-page text
-            first_page_text = self._get_first_page_text(pdf_doc)
-            self._extract_from_first_page(first_page_text, result)
-            
+
+            if pdf_doc is not None:
+                # 3. Extract from first-page text
+                first_page_text = self._get_first_page_text(pdf_doc)
+                self._extract_from_first_page(first_page_text, result)
+
             # 4. Infer authority tier from doc_type (if not already set)
             self._infer_authority_tier(result)
-            
+
             # 5. LLM fallback (opt-in)
             if self.enable_llm_fallback:
                 self._extract_from_llm(first_page_text, result)
-                
+
         finally:
-            pdf_doc.close()
+            if pdf_doc is not None:
+                pdf_doc.close()
         
         logger.info(
             f"Extracted metadata: year={result.year}, doc_type={result.doc_type}, "

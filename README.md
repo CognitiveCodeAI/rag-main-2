@@ -229,7 +229,17 @@ pytest --cov=app tests/
 
 ```bash
 cd backend
-python tests/eval/run_qa_eval.py
+python tests/eval/run_qa_eval.py --contract tests/eval/benchmark_contract.json
+```
+
+Benchmark runs are contract-gated. If dataset hashes, mode settings, or benchmark-critical flags drift from
+`backend/tests/eval/benchmark_contract.json`, the run exits before execution.
+
+To refresh benchmark contract hashes/counts after intentional benchmark file changes:
+
+```bash
+cd backend
+python tests/eval/update_benchmark_contract.py
 ```
 
 ## License

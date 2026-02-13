@@ -75,28 +75,43 @@ class ExtractionResult:
 
 class PageExtractor:
     """Extracts text from PDF pages with OCR fallback."""
-    
+
     # Expected chars per page for quality scoring
     EXPECTED_CHARS_PER_PAGE = 2000
-    
-    def __init__(self, ocr_client=None, skip_ocr: bool = False):
+
+    def __init__(
+        self,
+        ocr_client=None,
+        skip_ocr: bool = False,
+        quality_threshold: Optional[float] = None
+    ):
         """Initialize extractor.
-        
+
         Args:
             ocr_client: Optional OCR client. If None, will create on demand.
             skip_ocr: If True, skip OCR even for low-quality pages (use native text).
+            quality_threshold: OCR quality threshold override. If None, uses env config.
+                              Set from runtime settings at call site if desired.
         """
         self.settings = get_settings()
         self._ocr_client = ocr_client
         self.skip_ocr = skip_ocr
+        self._quality_threshold = quality_threshold
     
     @property
     def ocr_client(self):
         """Lazy-load OCR client."""
         if self._ocr_client is None:
-            from app.ocr.ollama_client import OllamaOCRClient
-            self._ocr_client = OllamaOCRClient()
+            from app.ocr import get_ocr_client
+            self._ocr_client = get_ocr_client()
         return self._ocr_client
+
+    @property
+    def quality_threshold(self) -> float:
+        """Get OCR quality threshold (override or env default)."""
+        if self._quality_threshold is not None:
+            return self._quality_threshold
+        return self.settings.text_quality_threshold
     
     def extract_pages(
         self,
@@ -183,15 +198,15 @@ class PageExtractor:
         text_spans = self._extract_text_spans(page)
         
         # Decide whether to use OCR (unless skip_ocr is set)
-        use_ocr = not self.skip_ocr and (force_ocr or quality_score < self.settings.text_quality_threshold)
-        
+        use_ocr = not self.skip_ocr and (force_ocr or quality_score < self.quality_threshold)
+
         if use_ocr:
-            logger.info(f"[{doc_id}] Page {page_no}: Using OCR (quality={quality_score:.2f})")
+            logger.info(f"[{doc_id}] Page {page_no}: Using OCR (quality={quality_score:.2f}, threshold={self.quality_threshold})")
             text_md, text_plain = self._ocr_page(page, page_no, doc_id)
             used_ocr = True
             # Note: OCR doesn't provide bbox, so text_spans will be from native extraction
             # This is still useful for fallback text search
-        elif self.skip_ocr and quality_score < self.settings.text_quality_threshold:
+        elif self.skip_ocr and quality_score < self.quality_threshold:
             logger.warning(f"[{doc_id}] Page {page_no}: Low quality but OCR skipped (quality={quality_score:.2f})")
             text_md = native_text
             text_plain = native_text

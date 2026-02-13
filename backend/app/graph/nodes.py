@@ -12,7 +12,7 @@ from typing import List, Optional
 import fitz  # PyMuPDF
 
 from app.db.graph_models import Node, NodeType
-from app.ocr.ollama_client import OllamaOCRClient
+from app.ocr import get_ocr_client, OCRClient
 from .ids import compute_node_id, compute_text_hash
 from .chunker import ChunkData
 from .figure_detector import FigureData
@@ -86,7 +86,7 @@ def create_figure_nodes(
     pdf_bytes: bytes,
     doc_id: str,
     version: int,
-    ocr_client: Optional[OllamaOCRClient] = None,
+    ocr_client: Optional[OCRClient] = None,
     skip_ocr: bool = False
 ) -> List[Node]:
     """Create Node objects from detected figures/tables.
@@ -112,7 +112,7 @@ def create_figure_nodes(
     
     # Initialize OCR client if needed (only if not skipping OCR)
     if ocr_client is None and not skip_ocr:
-        ocr_client = OllamaOCRClient()
+        ocr_client = get_ocr_client()
     
     # Initialize page extractor for image rendering
     page_extractor = PageExtractor()
@@ -257,7 +257,7 @@ def _create_single_figure_node(
     doc_id: str,
     version: int,
     page_extractor: PageExtractor,
-    ocr_client: Optional[OllamaOCRClient],
+    ocr_client: Optional[OCRClient],
     skip_ocr: bool = False
 ) -> Optional[Node]:
     """Create a single figure/table node.

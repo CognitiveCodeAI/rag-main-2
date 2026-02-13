@@ -12,7 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.graph.backend_selector import get_supported_types
 from app.models import HealthResponse, ServiceStatus
-from app.routes import query, upload, ingest, embed, retrieve, qa, documents, prompts, acl
+from app.routes import ingest, embed, retrieve, qa, documents, prompts, acl
+from app.routes import settings as settings_routes
+from app.services.worker_health import inspect_celery_workers
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -56,8 +58,6 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(query.router)
-app.include_router(upload.router)
 app.include_router(ingest.router)
 app.include_router(embed.router)
 app.include_router(retrieve.router)
@@ -65,6 +65,7 @@ app.include_router(qa.router)
 app.include_router(documents.router)
 app.include_router(prompts.router)
 app.include_router(acl.router)
+app.include_router(settings_routes.router)
 
 
 @app.get("/", tags=["root"])
@@ -144,6 +145,15 @@ async def health(check_services: bool = Query(default=False, description="Check 
             services["redis"] = ServiceStatus(status="healthy")
         except Exception as e:
             services["redis"] = ServiceStatus(status="unhealthy", message=str(e))
+            overall_status = "degraded"
+
+        # Check Celery workers
+        worker_status = inspect_celery_workers(timeout=1.0)
+        services["celery_worker"] = ServiceStatus(
+            status="healthy" if worker_status.healthy else "unhealthy",
+            message=worker_status.message,
+        )
+        if not worker_status.healthy:
             overall_status = "degraded"
     
     return HealthResponse(

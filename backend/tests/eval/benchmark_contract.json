@@ -1,0 +1,63 @@
+{
+  "contract_id": "rag_eval_contract",
+  "version": "1.0.0",
+  "description": "Benchmark contract for reproducible QA and retrieval evaluations.",
+  "created_utc": "2026-02-13T00:00:00Z",
+  "global_constraints": {
+    "allowed_top_k": [
+      5
+    ],
+    "require_report_contract_stamp": true
+  },
+  "modes": {
+    "standard": {
+      "dataset_path": "backend/tests/eval/golden_questions.json",
+      "dataset_sha256": "a9d0859d11d39365f879390074a78807aefd44946c34f3a4c60b2633f643fcb5",
+      "required_question_count": 10,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "phase2": {
+      "dataset_path": "backend/tests/eval/phase2_questions.json",
+      "dataset_sha256": "a99a299f0cf90dad351816f828c2e66a51bfdf5cd073d47ae9828b46fec10ce5",
+      "required_question_count": 20,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "rerank_ab": {
+      "dataset_path": "backend/tests/eval/golden_questions.json",
+      "dataset_sha256": "a9d0859d11d39365f879390074a78807aefd44946c34f3a4c60b2633f643fcb5",
+      "required_question_count": 10,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "propagation_safety": {
+      "dataset_path": "backend/tests/eval/golden_questions.json",
+      "dataset_sha256": "a9d0859d11d39365f879390074a78807aefd44946c34f3a4c60b2633f643fcb5",
+      "required_question_count": 10,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "track_like": {
+      "dataset_path": "backend/tests/eval/questions_tracklike.json",
+      "dataset_sha256": "878e8814d1975cf0899c8e6e3394524a9a28effabc36ab6b848e32f57a3950a5",
+      "required_question_count": 5,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "finalboss": {
+      "dataset_path": "backend/tests/eval/questions_finalboss.json",
+      "dataset_sha256": "501e6c7a378ee008f10afeef8863c0c16b44e0286edd4e1c43105caf3fc2a88c",
+      "required_question_count": 50,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "retrieval_harness": {
+      "queries_path": "backend/tests/eval/queries.json",
+      "queries_sha256": "855a32dc5d18de95641ef69b64bb19417c2b13b18035de1eac9bae448bfd3da3",
+      "fixtures_manifest_path": "backend/tests/eval/fixtures/manifest.json",
+      "fixtures_manifest_sha256": "b4f31bba696a00a5d026550a287d5b04c7b2827ba5b170055a53e65cb0d28ae9",
+      "allow_query_subset": false
+    }
+  }
+}

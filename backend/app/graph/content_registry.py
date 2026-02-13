@@ -46,64 +46,52 @@ class ContentRegistryManager:
         tenant_id: Optional[str] = None,
     ) -> ContentIdentity:
         """Resolve canonical doc_id for content, or register if new.
-        
+
         Uses atomic upsert (INSERT ... ON CONFLICT) to handle race conditions.
         Whoever wins the race becomes canonical; subsequent calls increment alias_count.
-        
+
         Args:
             content_hash: SHA256 hash of file content
             doc_id: Doc ID for this upload (based on source_uri)
             source_uri: Source URI of this upload
-            
+            tenant_id: Optional tenant ID (defaults to 'default')
+
         Returns:
             ContentIdentity with canonical_doc_id and duplicate status
         """
+        # Normalize tenant_id to 'default' when None for consistent lookups
+        effective_tenant = tenant_id if tenant_id else 'default'
+
         # First, check if entry exists to determine if this is a duplicate
-        # When tenant_id is provided, scope lookup by (tenant_id, content_hash)
+        # Always scope lookup by (tenant_id, content_hash)
         existing_query = self.db.query(ContentRegistry).filter(
-            ContentRegistry.content_hash == content_hash
+            ContentRegistry.content_hash == content_hash,
+            ContentRegistry.tenant_id == effective_tenant
         )
-        if tenant_id is not None:
-            existing_query = existing_query.filter(
-                ContentRegistry.tenant_id == tenant_id
-            )
         existing_before = existing_query.first()
-        
+
         was_existing = existing_before is not None
-        
+
         # Atomic upsert: INSERT or UPDATE on conflict
         # This handles race conditions - whoever wins becomes canonical
         values = dict(
+            tenant_id=effective_tenant,
             content_hash=content_hash,
             canonical_doc_id=doc_id,
             source_uri_first_seen=source_uri,
             latest_doc_id=doc_id,
             alias_count=1,
         )
-        if tenant_id is not None:
-            values["tenant_id"] = tenant_id
 
-        # Build upsert statement.
-        # When tenant_id is present, use the tenant-scoped unique index
-        # to ensure cross-tenant content with the same hash is NOT aliased.
-        # When tenant_id is absent (ACL disabled), use the PK for backward compat.
+        # Build upsert statement using composite PK (tenant_id, content_hash)
         insert_stmt = insert(ContentRegistry).values(**values)
-        if tenant_id is not None:
-            stmt = insert_stmt.on_conflict_do_update(
-                index_elements=['tenant_id', 'content_hash'],
-                set_={
-                    'latest_doc_id': doc_id,
-                    'alias_count': ContentRegistry.alias_count + 1,
-                },
-            )
-        else:
-            stmt = insert_stmt.on_conflict_do_update(
-                index_elements=['content_hash'],
-                set_={
-                    'latest_doc_id': doc_id,
-                    'alias_count': ContentRegistry.alias_count + 1,
-                },
-            )
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=['tenant_id', 'content_hash'],
+            set_={
+                'latest_doc_id': doc_id,
+                'alias_count': ContentRegistry.alias_count + 1,
+            },
+        )
         stmt = stmt.returning(
             ContentRegistry.canonical_doc_id,
             ContentRegistry.alias_count,
@@ -138,19 +126,26 @@ class ContentRegistryManager:
             alias_count=alias_count
         )
     
-    def get_canonical_doc_id(self, content_hash: str) -> Optional[str]:
-        """Get canonical doc_id for a content hash.
-        
+    def get_canonical_doc_id(
+        self,
+        content_hash: str,
+        tenant_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Get canonical doc_id for a content hash within a tenant.
+
         Args:
             content_hash: SHA256 hash of file content
-            
+            tenant_id: Optional tenant ID (defaults to 'default')
+
         Returns:
             Canonical doc_id if found, None otherwise
         """
+        effective_tenant = tenant_id if tenant_id else 'default'
         entry = self.db.query(ContentRegistry).filter(
-            ContentRegistry.content_hash == content_hash
+            ContentRegistry.content_hash == content_hash,
+            ContentRegistry.tenant_id == effective_tenant
         ).first()
-        
+
         return entry.canonical_doc_id if entry else None
     
     def get_all_aliases(self, canonical_doc_id: str) -> list[str]:

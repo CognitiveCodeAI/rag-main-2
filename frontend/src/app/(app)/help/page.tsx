@@ -52,7 +52,7 @@ export default function HelpPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Help</h1>
         <p className="text-muted-foreground">
-          Learn how to use FDD effectively
+          Learn how to use Near Perfect RAG effectively
         </p>
       </div>
 
@@ -156,14 +156,16 @@ export default function HelpPage() {
             <div>
               <p className="font-medium text-sm">Need more help?</p>
               <p className="text-xs text-muted-foreground">
-                Check out the documentation or contact support
+                Visit our website or contact support
               </p>
             </div>
           </div>
-          <Badge variant="outline" className="cursor-pointer hover:bg-accent">
-            <ExternalLink className="h-3 w-3 mr-1" />
-            Documentation
-          </Badge>
+          <a href="https://cognitivecode.ai" target="_blank" rel="noopener noreferrer">
+            <Badge variant="outline" className="cursor-pointer hover:bg-accent">
+              <ExternalLink className="h-3 w-3 mr-1" />
+              cognitivecode.ai
+            </Badge>
+          </a>
         </CardContent>
       </Card>
     </div>

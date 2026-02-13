@@ -117,10 +117,23 @@ class StorageClient:
         Returns:
             Raw file bytes
         """
+        content, _ = self.get_raw_with_content_type(doc_id, version_id, filename)
+        return content
+
+    def get_raw_with_content_type(
+        self,
+        doc_id: str,
+        version_id: str,
+        filename: str,
+    ) -> tuple[bytes, str | None]:
+        """Retrieve raw document content and stored content type."""
         object_name = f"raw/{doc_id}/{version_id}/{filename}"
         response = self.client.get_object(self.CORPUS_BUCKET, object_name)
         try:
-            return response.read()
+            content_type = None
+            if response.headers:
+                content_type = response.headers.get("Content-Type")
+            return response.read(), content_type
         finally:
             response.close()
             response.release_conn()

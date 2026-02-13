@@ -605,10 +605,28 @@ class GraphVectorIndex:
         
         self.connect()
         collection = self._ensure_collection(collection_name, node_type)
-        
+
+        # Prefer count(*) query because Milvus num_entities can remain stale
+        # when inserts are not explicitly flushed.
+        num_entities = collection.num_entities
+        try:
+            query_results = collection.query(
+                expr="",
+                output_fields=["count(*)"],
+            )
+            if query_results and len(query_results) > 0:
+                queried_count = query_results[0].get("count(*)")
+                if isinstance(queried_count, int):
+                    num_entities = queried_count
+        except Exception as e:
+            logger.warning(
+                f"Failed to query exact count for {collection_name}; using num_entities. "
+                f"error={e}"
+            )
+
         return {
             "name": collection_name,
-            "num_entities": collection.num_entities,
+            "num_entities": num_entities,
             "index_status": "indexed" if collection.indexes else "no_index",
             "version": self.collection_version,
         }

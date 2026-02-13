@@ -45,22 +45,23 @@ class EdgeType(enum.Enum):
 
 class ContentRegistry(Base):
     """Content registry for true content identity.
-    
-    Maps content_hash → canonical_doc_id to prevent logical duplicates
+
+    Maps (tenant_id, content_hash) → canonical_doc_id to prevent logical duplicates
     when the same content is uploaded from different source_uri paths.
+    Tenant-scoped to prevent cross-tenant duplicate detection.
     """
-    
+
     __tablename__ = "content_registry"
-    
-    content_hash = Column(String(64), primary_key=True)
+
+    # Composite PK for tenant isolation
+    tenant_id = Column(String(64), primary_key=True, nullable=False, default='default')
+    content_hash = Column(String(64), primary_key=True, nullable=False)
+
     canonical_doc_id = Column(String(64), nullable=False, index=True)
     first_seen_at = Column(DateTime(timezone=True), server_default=func.now())
     source_uri_first_seen = Column(Text, nullable=True)
     latest_doc_id = Column(String(64), nullable=True)
     alias_count = Column(Integer, nullable=False, default=1)
-
-    # ACL: tenant scoping for content identity
-    tenant_id = Column(String(64), nullable=True)
     
     def __repr__(self) -> str:
         return f"<ContentRegistry(hash={self.content_hash[:16]}..., canonical={self.canonical_doc_id})>"

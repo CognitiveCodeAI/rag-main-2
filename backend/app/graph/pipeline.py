@@ -13,6 +13,7 @@ Orchestrates:
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
 
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.db.graph_models import DocumentGraph, Node, Edge, NodeType, ContentRegistry
 from app.metadata.extractor import MetadataExtractor, ExtractedMetadata
-from app.ocr.ollama_client import OllamaOCRClient
+from app.ocr import get_ocr_client, OCRClient
 
 from .ids import compute_doc_id, compute_content_hash, IdempotencyChecker
 from .content_registry import ContentRegistryManager
@@ -81,12 +82,14 @@ class GraphIngestionPipeline:
     def __init__(
         self,
         db: Session,
-        ocr_client: Optional[OllamaOCRClient] = None,
+        ocr_client: Optional[OCRClient] = None,
         skip_ocr: bool = False,
         enable_llm_metadata: bool = False,
         ingestion_backend: Optional[str] = None,
         filename: Optional[str] = None,
         source_type: str = "pdf",
+        # OCR settings
+        ocr_quality_threshold: Optional[float] = None,
         # ACL fields
         tenant_id: Optional[str] = None,
         visibility: Optional[str] = None,
@@ -104,6 +107,7 @@ class GraphIngestionPipeline:
             ingestion_backend: Optional backend override ("native" or "docling")
             filename: Original filename (used by Docling adapter)
             source_type: Document source type (pdf, docx, pptx, etc.)
+            ocr_quality_threshold: OCR quality threshold override (uses runtime setting if None)
             tenant_id: Tenant ID for ACL (None = use default)
             visibility: Visibility tier: public|internal|restricted
             allowed_roles: Roles allowed access (for internal/restricted)
@@ -115,7 +119,11 @@ class GraphIngestionPipeline:
 
         # Initialize components
         self.skip_ocr = skip_ocr
-        self.page_extractor = PageExtractor(ocr_client=ocr_client, skip_ocr=skip_ocr)
+        self.page_extractor = PageExtractor(
+            ocr_client=ocr_client,
+            skip_ocr=skip_ocr,
+            quality_threshold=ocr_quality_threshold
+        )
         self.chunker = PageBoundedChunker()
         self.figure_detector = FigureDetector()
         self.idempotency = IdempotencyChecker(db)
@@ -142,6 +150,7 @@ class GraphIngestionPipeline:
         *,
         raw_bytes: bytes = None,
         stage_callback: Optional[callable] = None,
+        metadata_overrides: Optional[Dict[str, Any]] = None,
     ) -> IngestionResult:
         """Ingest a document.
 
@@ -150,6 +159,7 @@ class GraphIngestionPipeline:
             source_uri: Source URI (file path, URL, etc.)
             force_reprocess: If True, reprocess even if content exists
             raw_bytes: Alias for pdf_bytes (preferred for non-PDF documents)
+            metadata_overrides: Optional user-edited metadata values to apply
 
         Returns:
             IngestionResult with details
@@ -217,6 +227,7 @@ class GraphIngestionPipeline:
             source_uri=source_uri,
             filename=filename
         )
+        metadata = self._apply_metadata_overrides(metadata, metadata_overrides)
         logger.info(
             f"[{doc_id}] Metadata extracted: year={metadata.year}, "
             f"doc_type={metadata.doc_type}, department={metadata.department}"
@@ -409,6 +420,97 @@ class GraphIngestionPipeline:
             doc_id=doc_id,
         )
         return extraction, figures, "native", None
+
+    @staticmethod
+    def _coerce_iso_date(value: Any) -> Optional[date]:
+        """Coerce user override values to date objects."""
+        if value is None:
+            return None
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                return date.fromisoformat(raw[:10])
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _coerce_int(value: Any) -> Optional[int]:
+        """Coerce user override values to integers."""
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                return int(raw)
+            except ValueError:
+                return None
+        return None
+
+    def _apply_metadata_overrides(
+        self,
+        metadata: ExtractedMetadata,
+        metadata_overrides: Optional[Dict[str, Any]],
+    ) -> ExtractedMetadata:
+        """Apply user overrides with precedence over extracted metadata."""
+        if not metadata_overrides:
+            return metadata
+
+        allowed_fields = {
+            "doc_date",
+            "year",
+            "source_system",
+            "doc_type",
+            "department",
+            "authority_tier",
+            "effective_from",
+            "effective_to",
+        }
+        date_fields = {"doc_date", "effective_from", "effective_to"}
+        int_fields = {"year", "authority_tier"}
+
+        for field, raw_value in metadata_overrides.items():
+            if field not in allowed_fields:
+                continue
+
+            value = raw_value
+            if field in date_fields:
+                value = self._coerce_iso_date(raw_value)
+                if raw_value not in (None, "") and value is None:
+                    logger.warning(f"Ignoring invalid date override for {field}: {raw_value!r}")
+                    continue
+            elif field in int_fields:
+                value = self._coerce_int(raw_value)
+                if raw_value not in (None, "") and value is None:
+                    logger.warning(f"Ignoring invalid integer override for {field}: {raw_value!r}")
+                    continue
+            elif isinstance(raw_value, str):
+                stripped = raw_value.strip()
+                value = stripped or None
+
+            setattr(metadata, field, value)
+            metadata.provenance[field] = "user"
+            metadata.confidence[field] = 1.0 if value is not None else 0.0
+
+        if metadata.year is None and metadata.doc_date is not None:
+            metadata.year = metadata.doc_date.year
+            if "year" not in metadata_overrides:
+                metadata.provenance["year"] = metadata.provenance.get("doc_date", "derived")
+                metadata.confidence["year"] = metadata.confidence.get("doc_date", 0.5)
+
+        # If user changed doc_type but left authority tier unset, infer it from doc_type.
+        if metadata.authority_tier is None:
+            self.metadata_extractor._infer_authority_tier(metadata)
+
+        return metadata
 
     def _persist(
         self,

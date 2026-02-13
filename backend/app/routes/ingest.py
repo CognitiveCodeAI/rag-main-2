@@ -4,20 +4,22 @@ import hashlib
 import json
 import mimetypes
 import uuid
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Optional
 
 import fitz  # PyMuPDF, used to pre-validate PDF uploads
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func as sa_func
 
 from app.config import get_settings
 from app.db.graph_models import ContentRegistry, DocumentGraph, Node
-from app.db.models import Document, IngestJob
+from app.db.models import Document, IngestJob, IngestPreview
 from app.db.session import session_scope
 from app.graph.backend_selector import get_supported_types
+from app.metadata.extractor import MetadataExtractor
+from app.services.worker_health import inspect_celery_workers
 from app.storage.minio_client import get_storage_client
 from app.tasks.ingest import ingest_document_task
 
@@ -37,12 +39,53 @@ class JobStatusResponse(BaseModel):
     """Response for job status query."""
     job_id: str
     doc_id: Optional[str]
+    graph_doc_id: Optional[str] = None
+    graph_version: Optional[int] = None
     status: str
     pipeline_stage: Optional[str] = None
     error: Optional[str]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     created_at: datetime
+
+
+class MetadataPreviewResponse(BaseModel):
+    """Response for metadata preview extraction."""
+    preview_id: str
+    filename: str
+    source_type: str
+    mime_type: Optional[str] = None
+    expires_at: datetime
+    metadata_extracted: dict[str, Any]
+    metadata_provenance: dict[str, str]
+    metadata_confidence: dict[str, float]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProcessPreviewRequest(BaseModel):
+    """Request payload to process a staged preview."""
+    preview_id: str
+    doc_id: Optional[str] = None
+    ingestion_backend: Optional[str] = None
+    metadata_overrides: dict[str, Any] = Field(default_factory=dict)
+    tenant_id: Optional[str] = None
+    visibility: Optional[str] = None
+    allowed_roles: Optional[list[str]] = None
+    allowed_groups: Optional[list[str]] = None
+    allowed_users: Optional[list[str]] = None
+
+
+PREVIEW_TTL_MINUTES = 30
+METADATA_FIELDS = {
+    "doc_date",
+    "year",
+    "source_system",
+    "doc_type",
+    "department",
+    "authority_tier",
+    "effective_from",
+    "effective_to",
+}
 
 
 # Source type mapping from MIME types
@@ -113,6 +156,468 @@ def generate_version_id() -> str:
     return f"v{ts}-{rand}"
 
 
+def _parse_json_list(raw: Optional[str]) -> Optional[list]:
+    """Parse a JSON array string from multipart form fields."""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
+
+
+def _validate_pdf_if_needed(content: bytes, filename: str, content_type: Optional[str]) -> None:
+    """Fast-fail on invalid PDF payloads."""
+    is_pdf = (content_type or "").lower() in ("application/pdf", "pdf") or filename.lower().endswith(".pdf")
+    if not is_pdf:
+        return
+    try:
+        with fitz.open(stream=content, filetype="pdf"):
+            pass
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PDF file. Please upload a valid, non-corrupted PDF.",
+        )
+
+
+def _require_embedding_config() -> None:
+    """Ensure embedding prerequisites are configured before ingestion work."""
+    settings = get_settings()
+    missing = settings.validate_required_for_embeddings()
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Embedding service is not configured. "
+                f"Missing required settings: {', '.join(missing)}"
+            ),
+        )
+
+
+def _validate_source_type(filename: str, content_type: Optional[str], source_type: Optional[str]) -> str:
+    """Detect and validate source_type against enabled backends."""
+    detected_type = source_type or detect_source_type(filename, content_type)
+    supported = get_supported_types()
+    if detected_type not in supported:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Unsupported file type: {detected_type}. "
+                f"Currently supported: {sorted(supported)}. "
+                "Enable the Docling backend for additional format support."
+            ),
+        )
+    return detected_type
+
+
+def _validate_ingestion_backend(ingestion_backend: Optional[str]) -> None:
+    """Validate explicit backend override value."""
+    if ingestion_backend is not None and ingestion_backend not in ("native", "docling"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid ingestion_backend: {ingestion_backend}. Must be 'native' or 'docling'.",
+        )
+
+
+def _validate_visibility(visibility: Optional[str]) -> None:
+    """Validate ACL visibility value."""
+    if visibility and visibility not in ("public", "internal", "restricted"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid visibility: {visibility}. Must be public, internal, or restricted.",
+        )
+
+
+def _cleanup_expired_previews(session) -> None:
+    """Expire stale preview rows and remove staged objects from storage."""
+    now = datetime.now(timezone.utc)
+    expired = (
+        session.query(IngestPreview)
+        .filter(IngestPreview.status == "ready", IngestPreview.expires_at < now)
+        .all()
+    )
+    if not expired:
+        return
+
+    storage = get_storage_client()
+    for preview in expired:
+        try:
+            storage.delete_document(preview.preview_doc_id, preview.preview_version_id)
+        except Exception:
+            # Best effort cleanup; row status still transitions to expired.
+            pass
+        preview.status = "expired"
+
+
+def _is_preview_expired(expires_at: datetime) -> bool:
+    """Safely compare aware/naive preview timestamps against current UTC time."""
+    if expires_at.tzinfo is None:
+        return expires_at < datetime.utcnow()
+    return expires_at < datetime.now(timezone.utc)
+
+
+def _to_iso_date(value: Any) -> Optional[str]:
+    """Normalize date-like values to ISO date strings."""
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return date.fromisoformat(raw[:10]).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_metadata_overrides(raw: dict[str, Any]) -> dict[str, Any]:
+    """Keep supported keys and coerce values to expected primitive types."""
+    normalized: dict[str, Any] = {}
+
+    for key, value in raw.items():
+        if key not in METADATA_FIELDS:
+            continue
+
+        if key in {"doc_date", "effective_from", "effective_to"}:
+            normalized[key] = _to_iso_date(value)
+            continue
+
+        if key in {"year", "authority_tier"}:
+            if value is None or value == "":
+                normalized[key] = None
+            else:
+                try:
+                    normalized[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            continue
+
+        if value is None:
+            normalized[key] = None
+            continue
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            normalized[key] = stripped or None
+            continue
+
+        normalized[key] = str(value)
+
+    return normalized
+
+
+def _merge_metadata_payload(
+    extracted: dict[str, Any],
+    provenance: dict[str, str],
+    confidence: dict[str, float],
+    overrides: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str], dict[str, float]]:
+    """Merge metadata according to precedence: user > extracted > null."""
+    merged = {field: extracted.get(field) for field in METADATA_FIELDS}
+    merged_provenance = {field: provenance.get(field, "none") for field in METADATA_FIELDS}
+    merged_confidence = {field: float(confidence.get(field, 0.0)) for field in METADATA_FIELDS}
+
+    for field, value in overrides.items():
+        if field not in METADATA_FIELDS:
+            continue
+        merged[field] = value
+        merged_provenance[field] = "user"
+        merged_confidence[field] = 1.0 if value is not None else 0.0
+
+    if merged.get("year") is None and merged.get("doc_date"):
+        parsed = _to_iso_date(merged.get("doc_date"))
+        if parsed:
+            merged["year"] = int(parsed[:4])
+            if "year" not in overrides:
+                merged_provenance["year"] = merged_provenance.get("doc_date", "derived")
+                merged_confidence["year"] = merged_confidence.get("doc_date", 0.5)
+
+    return merged, merged_provenance, merged_confidence
+
+
+def _build_preview_warnings(metadata: dict[str, Any], confidence: dict[str, float]) -> list[str]:
+    """Generate user-facing review warnings for metadata step."""
+    warnings: list[str] = []
+    for field in ("doc_type", "department", "authority_tier"):
+        if metadata.get(field) is None:
+            warnings.append(f"{field} is missing and should be reviewed before processing.")
+
+    for field in ("doc_type", "department", "authority_tier", "year"):
+        if metadata.get(field) is not None and confidence.get(field, 0.0) < 0.7:
+            warnings.append(f"{field} has low confidence ({confidence.get(field, 0.0):.2f}).")
+
+    return warnings
+
+
+def _build_duplicate_response(session, checksum: str, tenant_id: Optional[str]) -> Optional[JSONResponse]:
+    """Return duplicate conflict response if content already exists."""
+    effective_tenant = tenant_id if tenant_id else "default"
+    existing = (
+        session.query(ContentRegistry)
+        .filter(
+            ContentRegistry.content_hash == checksum,
+            ContentRegistry.tenant_id == effective_tenant,
+        )
+        .first()
+    )
+    if not existing:
+        return None
+
+    canon_doc = session.query(DocumentGraph).filter_by(doc_id=existing.canonical_doc_id).first()
+    existing_info = {
+        "doc_id": existing.canonical_doc_id,
+        "content_hash": checksum,
+    }
+    if canon_doc:
+        node_count = (
+            session.query(sa_func.count(Node.node_id))
+            .filter(Node.doc_id == canon_doc.doc_id)
+            .scalar() or 0
+        )
+        existing_info.update(
+            {
+                "source_uri": canon_doc.source_uri,
+                "ingested_at": canon_doc.ingested_at.isoformat() if canon_doc.ingested_at else None,
+                "node_count": node_count,
+                "doc_type": canon_doc.doc_type,
+            }
+        )
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": "duplicate",
+            "message": "This document has already been ingested.",
+            "existing_document": existing_info,
+        },
+    )
+
+
+@router.post("/metadata-preview", response_model=MetadataPreviewResponse)
+async def metadata_preview(
+    file: UploadFile = File(...),
+    source_type: Optional[str] = Form(None),
+    tenant_id: Optional[str] = Form(None),
+) -> MetadataPreviewResponse:
+    """Upload and stage a file, then return extracted metadata for user review."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    filename = file.filename or "document"
+    _validate_pdf_if_needed(content, filename, file.content_type)
+    detected_type = _validate_source_type(filename, file.content_type, source_type)
+
+    extractor = MetadataExtractor(enable_llm_fallback=False)
+    extracted = extractor.extract(
+        pdf_bytes=content,
+        source_uri=f"upload://{filename}",
+        filename=filename,
+    )
+    extracted_dict = extracted.to_dict()
+    metadata_extracted = {field: extracted_dict.get(field) for field in METADATA_FIELDS}
+    metadata_provenance = dict(extracted.provenance)
+    metadata_confidence = {k: float(v) for k, v in extracted.confidence.items()}
+
+    preview_doc_id = f"preview-{uuid.uuid4().hex}"
+    preview_version_id = generate_version_id()
+    checksum = hashlib.sha256(content).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=PREVIEW_TTL_MINUTES)
+
+    storage = get_storage_client()
+    storage.put_raw(
+        doc_id=preview_doc_id,
+        version_id=preview_version_id,
+        content=content,
+        filename=filename,
+        content_type=file.content_type,
+    )
+
+    with session_scope() as session:
+        _cleanup_expired_previews(session)
+        preview = IngestPreview(
+            filename=filename,
+            source_type=detected_type,
+            mime_type=file.content_type,
+            preview_doc_id=preview_doc_id,
+            preview_version_id=preview_version_id,
+            checksum=checksum,
+            tenant_id=tenant_id,
+            metadata_extracted=metadata_extracted,
+            metadata_provenance=metadata_provenance,
+            metadata_confidence=metadata_confidence,
+            status="ready",
+            expires_at=expires_at,
+        )
+        session.add(preview)
+        session.flush()
+        preview_id = str(preview.preview_id)
+
+    warnings = _build_preview_warnings(metadata_extracted, metadata_confidence)
+    return MetadataPreviewResponse(
+        preview_id=preview_id,
+        filename=filename,
+        source_type=detected_type,
+        mime_type=file.content_type,
+        expires_at=expires_at,
+        metadata_extracted=metadata_extracted,
+        metadata_provenance=metadata_provenance,
+        metadata_confidence=metadata_confidence,
+        warnings=warnings,
+    )
+
+
+@router.post("/process", response_model=IngestResponse)
+async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse:
+    """Process a previously staged preview after metadata review/editing."""
+    _require_embedding_config()
+    _validate_ingestion_backend(req.ingestion_backend)
+    _validate_visibility(req.visibility)
+
+    try:
+        preview_uuid = uuid.UUID(req.preview_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid preview ID format")
+
+    normalized_overrides = _normalize_metadata_overrides(req.metadata_overrides or {})
+    effective_tenant: Optional[str] = None
+
+    with session_scope() as session:
+        _cleanup_expired_previews(session)
+        preview = session.query(IngestPreview).filter(IngestPreview.preview_id == preview_uuid).first()
+        if not preview:
+            raise HTTPException(status_code=404, detail="Preview not found")
+        if preview.status == "processed":
+            raise HTTPException(status_code=409, detail="Preview has already been processed")
+        if preview.status == "expired" or _is_preview_expired(preview.expires_at):
+            preview.status = "expired"
+            raise HTTPException(status_code=410, detail="Preview has expired. Re-upload to continue.")
+
+        effective_tenant = req.tenant_id or preview.tenant_id
+        duplicate = _build_duplicate_response(
+            session=session,
+            checksum=preview.checksum,
+            tenant_id=effective_tenant,
+        )
+        if duplicate is not None:
+            return duplicate
+
+        merged_meta, merged_provenance, merged_confidence = _merge_metadata_payload(
+            extracted=preview.metadata_extracted or {},
+            provenance=preview.metadata_provenance or {},
+            confidence=preview.metadata_confidence or {},
+            overrides=normalized_overrides,
+        )
+        preview.metadata_extracted = merged_meta
+        preview.metadata_provenance = merged_provenance
+        preview.metadata_confidence = merged_confidence
+        preview_filename = preview.filename
+        preview_doc_id = preview.preview_doc_id
+        preview_version_id = preview.preview_version_id
+        preview_source_type = preview.source_type
+        preview_mime_type = preview.mime_type
+        preview_checksum = preview.checksum
+
+    worker_status = inspect_celery_workers(timeout=1.0)
+    if not worker_status.healthy:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document processing queue is unavailable. "
+                f"{worker_status.message} Start a Celery worker and retry."
+            ),
+        )
+
+    storage = get_storage_client()
+    try:
+        content = storage.get_raw(preview_doc_id, preview_version_id, preview_filename)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Staged file not found for preview {req.preview_id}: {e}",
+        )
+
+    final_doc_id = req.doc_id or generate_doc_id(content, preview_filename)
+    final_version_id = generate_version_id()
+    storage.put_raw(
+        doc_id=final_doc_id,
+        version_id=final_version_id,
+        content=content,
+        filename=preview_filename,
+        content_type=preview_mime_type,
+    )
+
+    with session_scope() as session:
+        preview = session.query(IngestPreview).filter(IngestPreview.preview_id == preview_uuid).first()
+        if not preview or preview.status != "ready":
+            raise HTTPException(status_code=409, detail="Preview state changed. Re-upload to continue.")
+
+        # Repeat duplicate check to avoid race windows between preview read and final write.
+        duplicate = _build_duplicate_response(
+            session=session,
+            checksum=preview_checksum,
+            tenant_id=effective_tenant,
+        )
+        if duplicate is not None:
+            return duplicate
+
+        doc = Document(
+            doc_id=final_doc_id,
+            version_id=final_version_id,
+            source_type=preview_source_type,
+            source_uri=f"upload://{preview_filename}",
+            mime_type=preview_mime_type,
+            graph_doc_id=None,
+            graph_version=None,
+            checksum=preview_checksum,
+        )
+        session.merge(doc)
+
+        job = IngestJob(doc_id=final_doc_id, status="pending")
+        session.add(job)
+        session.flush()
+        job_id = str(job.job_id)
+
+        preview.status = "processed"
+        preview.processed_at = datetime.utcnow()
+        preview.tenant_id = effective_tenant
+
+    ingest_document_task.delay(
+        job_id=job_id,
+        doc_id=final_doc_id,
+        version_id=final_version_id,
+        filename=preview_filename,
+        source_type=preview_source_type,
+        ingestion_backend=req.ingestion_backend,
+        tenant_id=effective_tenant,
+        visibility=req.visibility,
+        allowed_roles=req.allowed_roles,
+        allowed_groups=req.allowed_groups,
+        allowed_users=req.allowed_users,
+        metadata_overrides=normalized_overrides,
+    )
+
+    try:
+        storage.delete_document(preview_doc_id, preview_version_id)
+    except Exception:
+        pass
+
+    return IngestResponse(
+        job_id=job_id,
+        doc_id=final_doc_id,
+        version_id=final_version_id,
+        status="pending",
+    )
+
+
 @router.post("/document", response_model=IngestResponse)
 async def ingest_document(
     file: UploadFile = File(...),
@@ -144,55 +649,12 @@ async def ingest_document(
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # Fast fail on invalid PDF bytes (most common failure)
-    if (file.content_type or "").lower() in ("application/pdf", "pdf") or (file.filename or "").lower().endswith(".pdf"):
-        try:
-            # Will raise if stream is not a valid PDF
-            with fitz.open(stream=content, filetype="pdf"):
-                pass
-        except Exception:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid PDF file. Please upload a valid, non-corrupted PDF.",
-            )
-
-    # Fail fast before writing any objects/rows when embedding prerequisites are missing.
-    # The current product flow is ingest -> embed immediately, so missing embedding config
-    # would create partial state (raw file + graph rows + failed embed job).
-    settings = get_settings()
-    missing = settings.validate_required_for_embeddings()
-    if missing:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Embedding service is not configured. "
-                f"Missing required settings: {', '.join(missing)}"
-            ),
-        )
-    
     filename = file.filename or "document"
-    
-    # Detect source type
-    detected_type = source_type or detect_source_type(filename, file.content_type)
-    
-    # Validate source type against currently-supported types
-    supported = get_supported_types()
-    if detected_type not in supported:
-        raise HTTPException(
-            status_code=415,
-            detail=(
-                f"Unsupported file type: {detected_type}. "
-                f"Currently supported: {sorted(supported)}. "
-                "Enable the Docling backend for additional format support."
-            ),
-        )
 
-    # Validate ingestion_backend if provided
-    if ingestion_backend is not None and ingestion_backend not in ("native", "docling"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid ingestion_backend: {ingestion_backend}. Must be 'native' or 'docling'."
-        )
+    _validate_pdf_if_needed(content, filename, file.content_type)
+    _require_embedding_config()
+    detected_type = _validate_source_type(filename, file.content_type, source_type)
+    _validate_ingestion_backend(ingestion_backend)
     
     # Generate IDs
     doc_id = doc_id or generate_doc_id(content, filename)
@@ -202,37 +664,24 @@ async def ingest_document(
     checksum = hashlib.sha256(content).hexdigest()
 
     # --- Duplicate detection: check if this content was already ingested ---
+    # Scope by tenant_id to prevent cross-tenant false positives
+    effective_tenant = tenant_id if tenant_id else "default"
+    # _build_duplicate_response enforces tenant filter:
+    # ContentRegistry.tenant_id == effective_tenant
     with session_scope() as session:
-        existing = session.query(ContentRegistry).filter_by(content_hash=checksum).first()
-        if existing:
-            # Fetch the canonical document's details
-            canon_doc = session.query(DocumentGraph).filter_by(
-                doc_id=existing.canonical_doc_id
-            ).first()
-            existing_info = {
-                "doc_id": existing.canonical_doc_id,
-                "content_hash": checksum,
-            }
-            if canon_doc:
-                node_count = (
-                    session.query(sa_func.count(Node.node_id))
-                    .filter(Node.doc_id == canon_doc.doc_id)
-                    .scalar() or 0
-                )
-                existing_info.update({
-                    "source_uri": canon_doc.source_uri,
-                    "ingested_at": canon_doc.ingested_at.isoformat() if canon_doc.ingested_at else None,
-                    "node_count": node_count,
-                    "doc_type": canon_doc.doc_type,
-                })
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "detail": "duplicate",
-                    "message": "This document has already been ingested.",
-                    "existing_document": existing_info,
-                },
-            )
+        duplicate = _build_duplicate_response(session, checksum, effective_tenant)
+        if duplicate is not None:
+            return duplicate
+
+    worker_status = inspect_celery_workers(timeout=1.0)
+    if not worker_status.healthy:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document processing queue is unavailable. "
+                f"{worker_status.message} Start a Celery worker and retry."
+            ),
+        )
 
     # Store raw file in MinIO
     storage = get_storage_client()
@@ -253,6 +702,8 @@ async def ingest_document(
             source_type=detected_type,
             source_uri=f"upload://{filename}",
             mime_type=file.content_type,
+            graph_doc_id=None,
+            graph_version=None,
             checksum=checksum,
         )
         session.merge(doc)
@@ -266,28 +717,11 @@ async def ingest_document(
         session.flush()
         job_id = str(job.job_id)
     
-    # Parse ACL JSON fields
-    def _parse_json_list(raw: Optional[str]) -> Optional[list]:
-        if not raw:
-            return None
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
-        return None
-
     parsed_roles = _parse_json_list(allowed_roles)
     parsed_groups = _parse_json_list(allowed_groups)
     parsed_users = _parse_json_list(allowed_users)
 
-    # Validate visibility if provided
-    if visibility and visibility not in ("public", "internal", "restricted"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid visibility: {visibility}. Must be public, internal, or restricted."
-        )
+    _validate_visibility(visibility)
 
     # Queue Celery task
     ingest_document_task.delay(
@@ -335,6 +769,8 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
         return JobStatusResponse(
             job_id=str(job.job_id),
             doc_id=job.doc_id,
+            graph_doc_id=job.graph_doc_id,
+            graph_version=job.graph_version,
             status=job.status,
             pipeline_stage=job.pipeline_stage,
             error=job.error,
@@ -355,19 +791,80 @@ async def list_document_versions(doc_id: str) -> list[dict]:
         List of version info dicts
     """
     with session_scope() as session:
-        docs = session.query(Document).filter_by(doc_id=doc_id).all()
-        
-        if not docs:
+        # Preferred path: canonical graph versions
+        graph_docs = (
+            session.query(DocumentGraph)
+            .filter(DocumentGraph.doc_id == doc_id)
+            .order_by(DocumentGraph.version.desc())
+            .all()
+        )
+
+        legacy_doc = session.query(Document).filter(Document.doc_id == doc_id).first()
+        if not graph_docs and legacy_doc and legacy_doc.graph_doc_id:
+            graph_docs = (
+                session.query(DocumentGraph)
+                .filter(DocumentGraph.doc_id == legacy_doc.graph_doc_id)
+                .order_by(DocumentGraph.version.desc())
+                .all()
+            )
+
+        # Backward-compatible fallback for older rows not yet mapped.
+        if not graph_docs and legacy_doc and legacy_doc.source_uri:
+            graph_docs = (
+                session.query(DocumentGraph)
+                .filter(DocumentGraph.source_uri == legacy_doc.source_uri)
+                .order_by(DocumentGraph.version.desc())
+                .all()
+            )
+
+        if graph_docs:
+            canonical_graph_doc_id = graph_docs[0].doc_id
+            linked_legacy = (
+                session.query(Document)
+                .filter(Document.graph_doc_id == canonical_graph_doc_id)
+                .all()
+            )
+            legacy_by_graph_version = {
+                d.graph_version: d for d in linked_legacy if d.graph_version is not None
+            }
+            return [
+                {
+                    "doc_id": g.doc_id,
+                    "graph_doc_id": g.doc_id,
+                    "graph_version": g.version,
+                    "version_id": (
+                        legacy_by_graph_version[g.version].version_id
+                        if g.version in legacy_by_graph_version
+                        else str(g.version)
+                    ),
+                    "legacy_doc_id": (
+                        legacy_by_graph_version[g.version].doc_id
+                        if g.version in legacy_by_graph_version
+                        else None
+                    ),
+                    "source_type": (
+                        legacy_by_graph_version[g.version].source_type
+                        if g.version in legacy_by_graph_version
+                        else None
+                    ),
+                    "created_at": g.ingested_at.isoformat() if g.ingested_at else None,
+                }
+                for g in graph_docs
+            ]
+
+        # Last-resort fallback: legacy row only
+        if not legacy_doc:
             raise HTTPException(status_code=404, detail="Document not found")
-        
+
         return [
             {
-                "doc_id": doc.doc_id,
-                "version_id": doc.version_id,
-                "source_type": doc.source_type,
-                "created_at": doc.created_at.isoformat() if doc.created_at else None,
+                "doc_id": legacy_doc.doc_id,
+                "graph_doc_id": legacy_doc.graph_doc_id,
+                "graph_version": legacy_doc.graph_version,
+                "version_id": legacy_doc.version_id,
+                "source_type": legacy_doc.source_type,
+                "created_at": legacy_doc.created_at.isoformat() if legacy_doc.created_at else None,
             }
-            for doc in docs
         ]
 
 
@@ -414,6 +911,8 @@ async def list_ingest_jobs(
             JobStatusResponse(
                 job_id=str(job.job_id),
                 doc_id=job.doc_id,
+                graph_doc_id=job.graph_doc_id,
+                graph_version=job.graph_version,
                 status=job.status,
                 pipeline_stage=job.pipeline_stage,
                 error=job.error,
