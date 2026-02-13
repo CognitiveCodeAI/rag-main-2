@@ -22,6 +22,12 @@ from sqlalchemy.orm import Session
 from app.db.graph_models import DocumentGraph, Node, Edge, NodeType, ContentRegistry
 from app.metadata.extractor import MetadataExtractor, ExtractedMetadata
 from app.ocr import get_ocr_client, OCRClient
+from app.storage.minio_client import get_storage_client
+from app.services.highlighting import (
+    build_selector_artifacts_for_nodes,
+    hydrate_nodes_with_selectors,
+    persist_highlight_artifacts,
+)
 
 from .ids import compute_doc_id, compute_content_hash, IdempotencyChecker
 from .content_registry import ContentRegistryManager
@@ -285,21 +291,48 @@ class GraphIngestionPipeline:
         # Propagate metadata to all nodes
         self._propagate_metadata_to_nodes(all_nodes, node_metadata_fields)
         
-        # 10. Create edges
+        # 10. Build canonical highlighting selectors/artifacts
+        highlight_artifacts: Optional[Dict[str, Any]] = None
+        try:
+            # Build selector bundles and attach to node.meta before persistence.
+            temp_doc = DocumentGraph(
+                doc_id=doc_id,
+                source_uri=source_uri,
+                content_hash=content_hash,
+                version=version,
+            )
+            highlight_artifacts = build_selector_artifacts_for_nodes(
+                doc=temp_doc,
+                nodes=all_nodes,
+                source_type=self.source_type,
+                mime_type=None,
+            )
+            hydrate_nodes_with_selectors(all_nodes, highlight_artifacts["selectors"])
+        except Exception as e:
+            logger.warning(f"[{doc_id}] Failed to build highlight selectors during ingestion: {e}")
+            highlight_artifacts = None
+
+        # 11. Create edges
         edges = create_all_edges(
             nodes=all_nodes,
             doc_id=doc_id,
             version=version
         )
         
-        # 11. Compute health metrics
+        # 12. Compute health metrics
         health_metrics = self._compute_health_metrics(all_nodes, metadata)
         
-        # 12. Create document record with metadata
+        # 13. Create document record with metadata
         doc_meta = extraction.to_meta()
         doc_meta['metadata'] = metadata.to_dict()
         doc_meta['health'] = health_metrics
         doc_meta['ingestion_backend'] = backend_used
+        if highlight_artifacts:
+            doc_meta["highlighting"] = {
+                "normalization": "unicode_nfkc+ws_collapse",
+                "nodes_with_selectors": highlight_artifacts.get("nodes_with_selectors", 0),
+                "total_nodes": highlight_artifacts.get("total_nodes", 0),
+            }
         if docling_provenance:
             doc_meta['docling'] = docling_provenance
         
@@ -329,10 +362,25 @@ class GraphIngestionPipeline:
             policy_version=1,
         )
         
-        # 13. Persist to database
+        # 14. Persist to database
         if stage_callback:
             stage_callback("persisting")
         self._persist(doc, all_nodes, edges)
+
+        # 15. Persist highlight artifacts to object storage (non-fatal)
+        if highlight_artifacts:
+            try:
+                storage = get_storage_client()
+                persist_highlight_artifacts(
+                    storage=storage,
+                    doc_id=doc_id,
+                    version=version,
+                    canonical_html=highlight_artifacts["canonical_html"],
+                    source_map=highlight_artifacts["source_map"],
+                    selectors=highlight_artifacts["selectors"],
+                )
+            except Exception as e:
+                logger.warning(f"[{doc_id}] Failed to store highlight artifacts: {e}")
         
         # Count figures vs tables
         fig_count = sum(1 for n in figure_nodes if n.node_type == NodeType.figure)

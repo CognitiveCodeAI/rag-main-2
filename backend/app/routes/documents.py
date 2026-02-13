@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
@@ -21,6 +21,10 @@ from app.db.session import get_session
 from app.db.models import Document, IngestJob, DocumentIR, Chunk, VectorIndexVersion, EmbeddingJob
 from app.db.graph_models import DocumentGraph, Node, Edge, NodeType, EdgeType, ContentRegistry
 from app.services.document_identity import find_legacy_for_graph
+from app.services.highlighting import (
+    build_source_manifest,
+    ensure_highlight_artifacts,
+)
 from app.storage.minio_client import get_storage_client
 from app.graph.vector_index import GraphVectorIndex
 
@@ -132,6 +136,20 @@ class DocumentStatsResponse(BaseModel):
     by_type: dict
     by_department: dict
     by_year: dict
+
+
+class SourceManifestResponse(BaseModel):
+    """Source/selector artifact availability for citation highlighting."""
+
+    doc_id: str
+    version: int
+    raw_url: str
+    mime_type: str
+    canonical_view_available: bool
+    source_map_available: bool
+    selectors_available: bool
+    selector_coverage: dict
+    backfill_needed: bool
 
 
 # ============================================
@@ -482,6 +500,106 @@ async def list_document_edges(
         items=items,
         total=len(items),
     )
+
+
+@router.get("/{doc_id}/source-manifest", response_model=SourceManifestResponse)
+async def get_source_manifest(
+    doc_id: str,
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> SourceManifestResponse:
+    """Return source + selector artifact availability for a document."""
+    settings = get_settings()
+    if not settings.enable_cross_format_highlighting:
+        raise HTTPException(status_code=404, detail="Cross-format highlighting is disabled")
+
+    doc = db.query(DocumentGraph).filter(DocumentGraph.doc_id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+    _check_doc_access(doc, entitlements)
+
+    legacy_doc = find_legacy_for_graph(db, doc.doc_id, doc.version)
+    mime_type = legacy_doc.mime_type if legacy_doc else None
+
+    storage = get_storage_client()
+    manifest = build_source_manifest(storage, doc, mime_type=mime_type)
+
+    # Lazy backfill on first request if artifacts are missing.
+    if manifest.get("backfill_needed"):
+        try:
+            ensure_highlight_artifacts(db=db, doc=doc, storage=storage)
+            manifest = build_source_manifest(storage, doc, mime_type=mime_type)
+        except Exception as e:
+            logger.warning(f"[{doc_id}] Highlight artifact backfill failed: {e}")
+
+    return SourceManifestResponse(**manifest)
+
+
+@router.get("/{doc_id}/canonical")
+async def get_canonical_document_view(
+    doc_id: str,
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> Response:
+    """Return canonical HTML view used for cross-format highlighting."""
+    settings = get_settings()
+    if not settings.enable_cross_format_highlighting:
+        raise HTTPException(status_code=404, detail="Cross-format highlighting is disabled")
+
+    doc = db.query(DocumentGraph).filter(DocumentGraph.doc_id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+    _check_doc_access(doc, entitlements)
+
+    storage = get_storage_client()
+    if not storage.canonical_view_exists(doc.doc_id, str(doc.version)):
+        try:
+            ensure_highlight_artifacts(db=db, doc=doc, storage=storage)
+        except Exception as e:
+            logger.warning(f"[{doc_id}] Failed to backfill canonical view: {e}")
+
+    if not storage.canonical_view_exists(doc.doc_id, str(doc.version)):
+        raise HTTPException(status_code=404, detail="Canonical view not available for this document")
+
+    html_view = storage.get_canonical_view(doc.doc_id, str(doc.version))
+    return Response(
+        content=html_view,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "public, max-age=300",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@router.get("/{doc_id}/source-map")
+async def get_document_source_map(
+    doc_id: str,
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> JSONResponse:
+    """Return canonical source map for selector-based citation highlighting."""
+    settings = get_settings()
+    if not settings.enable_cross_format_highlighting:
+        raise HTTPException(status_code=404, detail="Cross-format highlighting is disabled")
+
+    doc = db.query(DocumentGraph).filter(DocumentGraph.doc_id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+    _check_doc_access(doc, entitlements)
+
+    storage = get_storage_client()
+    if not storage.source_map_exists(doc.doc_id, str(doc.version)):
+        try:
+            ensure_highlight_artifacts(db=db, doc=doc, storage=storage)
+        except Exception as e:
+            logger.warning(f"[{doc_id}] Failed to backfill source map: {e}")
+
+    if not storage.source_map_exists(doc.doc_id, str(doc.version)):
+        raise HTTPException(status_code=404, detail="Source map not available for this document")
+
+    source_map = storage.get_source_map(doc.doc_id, str(doc.version))
+    return JSONResponse(content=source_map)
 
 
 @router.get("/{doc_id}/raw")

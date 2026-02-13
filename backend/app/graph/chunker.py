@@ -510,6 +510,7 @@ class PageBoundedChunker:
             "segment_count": len(segments),
             "section_hint": section_hint,
             "anchor_snippet": anchor_snippet,
+            "normalization": "unicode_nfkc+ws_collapse",
         }
         
         # Add bbox and page_size if page_data available
@@ -519,6 +520,12 @@ class PageBoundedChunker:
                 "width": page_data.width,
                 "height": page_data.height
             }
+
+            # Preserve docling structural provenance where available.
+            if getattr(page_data, "meta", None):
+                for key in ("docling_self_ref", "block_id", "sheet", "slide"):
+                    if page_data.meta.get(key) is not None:
+                        meta[key] = page_data.meta.get(key)
             
             # Compute merged bbox from matching text spans
             bbox = self._compute_chunk_bbox(text_plain, page_data)

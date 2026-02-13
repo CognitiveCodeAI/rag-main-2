@@ -13,21 +13,31 @@ Performs:
 """
 
 import httpx
+import hashlib
 import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.db.graph_models import Node
+from app.config import get_settings
+from app.db.graph_models import Node, DocumentGraph
+from app.db.models import CitationSnapshot
 from app.embeddings.client import get_embedding_client
 from app.graph.expander import GraphExpander, ExpandedContext
 from app.graph.context_packer import ContextPacker, PackedContext
 from app.graph.vector_index import GraphVectorIndex
 from app.llm.openai_client import OpenAIClient, AnswerResult, Citation
+from app.services.document_identity import find_legacy_for_graph
+from app.services.highlighting import (
+    ensure_highlight_artifacts,
+    resolve_citation_selector,
+)
+from app.storage.minio_client import get_storage_client
 from .normalizer import normalize_query, NormalizedQuery
 from .section_booster import SectionBooster, SectionBoostResult
 from .constraint_parser import parse_constraints, ParsedConstraints
@@ -583,6 +593,7 @@ Return JSON only in the following format:
         total_start = time.time()
         
         result = QAResult(question=question, doc_id=doc_id)
+        request_id = uuid.uuid4().hex
         result.rerank_enabled = self.enable_rerank
         
         # Set prompt version for auditability
@@ -1210,7 +1221,9 @@ Return JSON only in the following format:
                 citations=answer_result.citations,
                 doc_id=doc_id,
                 version=1,  # Default version, could be passed from document lookup
-                context_node_ids=result.context_node_ids
+                context_node_ids=result.context_node_ids,
+                answer_text=answer_result.answer,
+                request_id=request_id,
             )
             # ACL enforcement: final citation filter (last line of defense)
             result.citations = self.acl_enforcer.filter_citations(result.citations)
@@ -1241,7 +1254,9 @@ Return JSON only in the following format:
         citations: List['Citation'],
         doc_id: Optional[str],
         version: int = 1,
-        context_node_ids: Optional[List[str]] = None
+        context_node_ids: Optional[List[str]] = None,
+        answer_text: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Hydrate citations with provenance anchoring data from nodes.
         
@@ -1253,12 +1268,12 @@ Return JSON only in the following format:
             doc_id: Document ID for raw_url generation (None if searching all docs)
             version: Document version
             context_node_ids: Node IDs from the context (for fallback lookup by page)
+            answer_text: Final answer text (used to create immutable citation snapshots)
+            request_id: Request correlation ID for snapshot records
             
         Returns:
             List of citation dicts with full anchoring data
         """
-        from app.db.graph_models import Node
-        
         if not citations:
             return []
         
@@ -1277,6 +1292,42 @@ Return JSON only in the following format:
                 if n.page_no and n.page_no not in page_to_node:
                     page_to_node[n.page_no] = n
         
+        highlighting_enabled = get_settings().enable_cross_format_highlighting
+        storage = get_storage_client() if highlighting_enabled else None
+        graph_doc_cache: Dict[str, Optional[DocumentGraph]] = {}
+        legacy_cache: Dict[str, Any] = {}
+        selectors_cache: Dict[str, Dict[str, dict]] = {}
+        attempted_backfill: set[str] = set()
+
+        answer_hash = hashlib.sha256((answer_text or "").encode("utf-8")).hexdigest()
+        request_id = request_id or uuid.uuid4().hex
+
+        exact_count = 0
+        unresolved_count = 0
+        resolve_latency_ms = 0.0
+        snapshot_count = 0
+
+        def infer_source_type(source_uri: Optional[str]) -> str:
+            if not source_uri:
+                return "txt"
+            lower = source_uri.lower()
+            ext_to_type = {
+                ".pdf": "pdf",
+                ".docx": "docx",
+                ".pptx": "pptx",
+                ".xlsx": "xlsx",
+                ".html": "html",
+                ".htm": "html",
+                ".md": "md",
+                ".markdown": "md",
+                ".csv": "csv",
+                ".txt": "txt",
+            }
+            for ext, src_type in ext_to_type.items():
+                if lower.endswith(ext):
+                    return src_type
+            return "txt"
+
         hydrated_citations = []
         for c in citations:
             node = node_map.get(c.node_id)
@@ -1288,17 +1339,119 @@ Return JSON only in the following format:
             # Use doc_id from node if not provided (searching all documents)
             citation_doc_id = doc_id
             citation_version = version
+            citation_page_no = c.page_no
             if node:
                 citation_doc_id = node.doc_id
                 citation_version = node.version
+                citation_page_no = c.page_no or node.page_no
+
+            graph_doc: Optional[DocumentGraph] = None
+            graph_key = f"{citation_doc_id}:{citation_version}" if citation_doc_id else ""
+            if citation_doc_id:
+                if graph_key not in graph_doc_cache:
+                    graph_doc_cache[graph_key] = (
+                        self.db.query(DocumentGraph)
+                        .filter(
+                            DocumentGraph.doc_id == citation_doc_id,
+                            DocumentGraph.version == citation_version,
+                        )
+                        .first()
+                    )
+                graph_doc = graph_doc_cache.get(graph_key)
+
+            if highlighting_enabled and graph_doc and graph_key not in attempted_backfill:
+                attempted_backfill.add(graph_key)
+                try:
+                    if not (
+                        storage.canonical_view_exists(graph_doc.doc_id, str(graph_doc.version))
+                        and storage.source_map_exists(graph_doc.doc_id, str(graph_doc.version))
+                        and storage.selectors_exists(graph_doc.doc_id, str(graph_doc.version))
+                    ):
+                        ensure_highlight_artifacts(self.db, graph_doc, storage=storage)
+                        logger.info(f"[QA] selector_backfill_count +1 doc={graph_doc.doc_id}")
+                except Exception as e:
+                    logger.warning(f"[QA] Failed to backfill highlight artifacts for {graph_key}: {e}")
+
+            legacy_doc = None
+            source_type: Optional[str] = None
+            mime_type: Optional[str] = None
+            if graph_doc:
+                if graph_key not in legacy_cache:
+                    legacy_cache[graph_key] = find_legacy_for_graph(
+                        self.db,
+                        graph_doc.doc_id,
+                        graph_doc.version,
+                    )
+                legacy_doc = legacy_cache.get(graph_key)
+                source_type = legacy_doc.source_type if legacy_doc else infer_source_type(graph_doc.source_uri)
+                mime_type = legacy_doc.mime_type if legacy_doc else None
+
+            selector_bundle = None
+            if node and node.meta:
+                selector_bundle = node.meta.get("selector_bundle")
+
+            if highlighting_enabled and not selector_bundle and graph_doc and node:
+                selector_key = f"{graph_doc.doc_id}:{graph_doc.version}"
+                if selector_key not in selectors_cache:
+                    selectors_cache[selector_key] = {}
+                    if storage.selectors_exists(graph_doc.doc_id, str(graph_doc.version)):
+                        try:
+                            selectors = storage.get_selectors(graph_doc.doc_id, str(graph_doc.version))
+                            selectors_cache[selector_key] = {
+                                s.get("node_id"): s for s in selectors if s.get("node_id")
+                            }
+                        except Exception as e:
+                            logger.warning(
+                                f"[QA] Failed to load selector cache for {selector_key}: {e}"
+                            )
+                selector_bundle = selectors_cache.get(selector_key, {}).get(node.node_id)
+
+            resolve_result = {
+                "resolve_status": "unresolved",
+                "exact_text": None,
+                "resolved_position": None,
+                "reason": "missing_selector_bundle",
+            }
+            if highlighting_enabled and graph_doc and selector_bundle:
+                start_resolve = time.time()
+                resolve_result = resolve_citation_selector(
+                    storage=storage,
+                    doc=graph_doc,
+                    selector_bundle=selector_bundle,
+                    strict=True,     # legal-grade fail-closed default
+                    allow_fuzzy=False,
+                )
+                resolve_latency_ms += (time.time() - start_resolve) * 1000
+            else:
+                unresolved_count += 1
+
+            if resolve_result.get("resolve_status") == "exact":
+                exact_count += 1
+            elif graph_doc and selector_bundle:
+                unresolved_count += 1
             
             citation_dict = {
                 "node_id": c.node_id,
                 "doc_id": citation_doc_id,
                 "version": citation_version,
-                "page_no": c.page_no,
+                "page_no": citation_page_no,
                 "label": c.label,
                 "raw_url": f"/v1/documents/{citation_doc_id}/raw" if citation_doc_id else None,
+                "source_type": source_type,
+                "mime_type": mime_type,
+                "selector_bundle": selector_bundle,
+                "resolve_status": resolve_result.get("resolve_status", "unresolved"),
+                "resolve_reason": resolve_result.get("reason"),
+                "canonical_view_url": (
+                    f"/v1/documents/{citation_doc_id}/canonical"
+                    if (citation_doc_id and highlighting_enabled)
+                    else None
+                ),
+                "source_map_url": (
+                    f"/v1/documents/{citation_doc_id}/source-map"
+                    if (citation_doc_id and highlighting_enabled)
+                    else None
+                ),
             }
             
             # Add anchoring data from node if found
@@ -1313,19 +1466,62 @@ Return JSON only in the following format:
                         citation_dict["page_size"] = node.meta["page_size"]
                     if node.meta.get("anchor_snippet"):
                         citation_dict["anchor_snippet"] = node.meta["anchor_snippet"]
+                    if node.meta.get("normalization"):
+                        citation_dict["normalization"] = node.meta["normalization"]
                 
                 # Fallback: generate anchor_snippet from text_plain if not in meta
                 if "anchor_snippet" not in citation_dict and node.text_plain:
                     citation_dict["anchor_snippet"] = node.text_plain[:150].strip()
+
+            # Keep text_quote exact snippet available for frontend fallback.
+            if selector_bundle and selector_bundle.get("text_quote", {}).get("exact"):
+                citation_dict["text"] = selector_bundle["text_quote"]["exact"]
+                if "anchor_snippet" not in citation_dict:
+                    citation_dict["anchor_snippet"] = selector_bundle["text_quote"]["exact"][:150]
+
+            snapshot_id: Optional[str] = None
+            if highlighting_enabled and graph_doc and selector_bundle:
+                try:
+                    snapshot_uuid = uuid.uuid4()
+                    snapshot = CitationSnapshot(
+                        snapshot_id=snapshot_uuid,
+                        request_id=request_id,
+                        doc_id=graph_doc.doc_id,
+                        version=graph_doc.version,
+                        node_id=node.node_id if node else c.node_id,
+                        selector_bundle=selector_bundle,
+                        exact_text=resolve_result.get("exact_text"),
+                        answer_hash=answer_hash,
+                        content_hash=graph_doc.content_hash,
+                    )
+                    self.db.add(snapshot)
+                    snapshot_id = str(snapshot_uuid)
+                    snapshot_count += 1
+                except Exception as e:
+                    logger.warning(f"[QA] Failed to create citation snapshot for {c.node_id}: {e}")
+            citation_dict["snapshot_id"] = snapshot_id
             
             hydrated_citations.append(citation_dict)
-        
-        # Log hydration stats
-        with_bbox = sum(1 for c in hydrated_citations if c.get("bbox"))
-        with_snippet = sum(1 for c in hydrated_citations if c.get("anchor_snippet"))
+
+        if snapshot_count > 0:
+            try:
+                self.db.commit()
+            except Exception as e:
+                logger.warning(f"[QA] Failed to commit citation snapshots: {e}")
+                self.db.rollback()
+
+        with_bbox = sum(1 for item in hydrated_citations if item.get("bbox"))
+        with_snippet = sum(1 for item in hydrated_citations if item.get("anchor_snippet"))
         logger.info(
             f"[QA] Hydrated {len(hydrated_citations)} citations: "
             f"{with_bbox} with bbox, {with_snippet} with anchor_snippet"
+        )
+        logger.info(
+            "[QA] Highlight metrics: "
+            f"highlight_resolve_exact_count={exact_count}, "
+            f"highlight_resolve_unresolved_count={unresolved_count}, "
+            f"highlight_resolve_latency_ms={resolve_latency_ms:.2f}, "
+            f"citation_snapshot_created_count={snapshot_count}"
         )
         
         return hydrated_citations
@@ -2138,6 +2334,7 @@ Return JSON only in the following format:
         total_start = time.time()
         
         result = QAResult(question=question, doc_id=doc_id)
+        request_id = uuid.uuid4().hex
         result.propagation_safety_mode = True
         
         # Set prompt version for auditability
@@ -2217,7 +2414,27 @@ Return JSON only in the following format:
             
             # ===== Build result =====
             result.answer = final_answer
-            result.citations = citations
+            hydrated_input: List[Citation] = []
+            for cite in citations:
+                if isinstance(cite, Citation):
+                    hydrated_input.append(cite)
+                elif isinstance(cite, dict):
+                    hydrated_input.append(
+                        Citation(
+                            node_id=str(cite.get("node_id", "")),
+                            page_no=cite.get("page_no"),
+                            label=cite.get("label"),
+                        )
+                    )
+
+            result.citations = self._hydrate_citations(
+                citations=hydrated_input,
+                doc_id=doc_id,
+                version=version or 1,
+                answer_text=final_answer,
+                request_id=request_id,
+            )
+            result.citations = self.acl_enforcer.filter_citations(result.citations)
             result.model_id = self.llm_client.model
             
             # Aggregate conflicts from all sub-answers

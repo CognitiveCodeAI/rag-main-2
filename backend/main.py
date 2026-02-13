@@ -165,6 +165,7 @@ async def health(check_services: bool = Query(default=False, description="Check 
         features={
             "acl_enabled": settings.acl_enabled,
             "supported_file_types": sorted(get_supported_types()),
+            "cross_format_highlighting_enabled": settings.enable_cross_format_highlighting,
         },
     )
 

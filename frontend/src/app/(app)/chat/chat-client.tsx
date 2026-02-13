@@ -54,7 +54,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { PDFViewer, CitationHighlight } from "@/components/pdf-viewer";
+import { SourceViewer } from "@/components/source-viewer";
 
 // Helper to parse inline citations like [seed:14] and render them as clickable chips
 function parseInlineCitations(
@@ -141,6 +141,7 @@ interface Message extends Omit<RuntimeMessage, "response"> {
 // Citation chip component
 function CitationChip({ citation, onClick }: { citation: Citation; onClick?: () => void }) {
   const label = citation.label || `Page ${citation.page_no || "?"}`;
+  const status = citation.resolve_status || "unresolved";
   
   return (
     <Tooltip>
@@ -158,6 +159,14 @@ function CitationChip({ citation, onClick }: { citation: Citation; onClick?: () 
           {citation.text?.slice(0, 150)}
           {citation.text && citation.text.length > 150 ? "..." : ""}
         </p>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          Status: {status}
+        </p>
+        {citation.snapshot_id && (
+          <p className="text-[11px] text-muted-foreground">
+            Snapshot: {citation.snapshot_id.slice(0, 8)}
+          </p>
+        )}
       </TooltipContent>
     </Tooltip>
   );
@@ -684,11 +693,12 @@ export default function ChatClient() {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
 
-  // PDF Viewer state for citation highlighting
-  const [pdfViewerOpen, setPdfViewerOpen] = React.useState(false);
-  const [pdfViewerUrl, setPdfViewerUrl] = React.useState("");
-  const [pdfViewerHighlight, setPdfViewerHighlight] = React.useState<CitationHighlight | undefined>();
-  const [pdfViewerTitle, setPdfViewerTitle] = React.useState("");
+  // Source viewer state for citation highlighting (PDF + non-PDF)
+  const [sourceViewerOpen, setSourceViewerOpen] = React.useState(false);
+  const [sourceViewerUrl, setSourceViewerUrl] = React.useState("");
+  const [sourceViewerTitle, setSourceViewerTitle] = React.useState("");
+  const [sourceViewerCitation, setSourceViewerCitation] = React.useState<Citation | undefined>();
+  const [sourceViewerDocId, setSourceViewerDocId] = React.useState("");
 
   // Fetch documents for the selector
   const { data: docsData, isLoading: docsLoading } = useQuery({
@@ -747,33 +757,25 @@ export default function ChatClient() {
     inputRef.current?.focus();
   }, []);
 
-  // Handle citation click to open PDF viewer with highlighting
+  // Handle citation click to open source viewer with highlighting
   const handleCitationClick = React.useCallback((citation: Citation, docId: string) => {
     // Get API base URL
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
     
-    // Use raw_url from citation or construct it
-    const pdfUrl = citation.raw_url 
+    // Use raw_url from citation or construct it.
+    const rawUrl = citation.raw_url
       ? `${apiUrl}${citation.raw_url}`
       : `${apiUrl}/v1/documents/${docId}/raw`;
-    
-    // Build highlight info
-    const highlight: CitationHighlight = {
-      page_no: citation.page_no || 1,
-      bbox: citation.bbox,
-      page_size: citation.page_size,
-      anchor_snippet: citation.anchor_snippet || citation.text,
-      label: citation.label,
-    };
-    
+
     // Find document name for title
     const doc = documents.find((d) => d.doc_id === docId);
     const title = doc ? getFilename(doc.source_uri) : "Document";
     
-    setPdfViewerUrl(pdfUrl);
-    setPdfViewerHighlight(highlight);
-    setPdfViewerTitle(title);
-    setPdfViewerOpen(true);
+    setSourceViewerUrl(rawUrl);
+    setSourceViewerCitation(citation);
+    setSourceViewerDocId(docId);
+    setSourceViewerTitle(title);
+    setSourceViewerOpen(true);
   }, [documents]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
@@ -980,9 +982,13 @@ export default function ChatClient() {
                   message.response && openSourcePanel(message.response)
                 }
                 onCitationClick={(citation) => {
-                  // Open PDF viewer with citation highlighting
-                  const docId = message.response?.doc_id || selectedDoc;
-                  handleCitationClick(citation, docId);
+                  // Open source viewer with citation highlighting
+                  const citationDocId = citation.doc_id || message.response?.doc_id || selectedDoc;
+                  if (!citationDocId || citationDocId === "__all__") {
+                    toast.error("Citation does not include a resolvable document ID.");
+                    return;
+                  }
+                  handleCitationClick(citation, citationDocId);
                 }}
               />
             ))
@@ -1031,13 +1037,14 @@ export default function ChatClient() {
       </div>
     </div>
     
-    {/* PDF Viewer for citation highlighting */}
-    <PDFViewer
-      url={pdfViewerUrl}
-      open={pdfViewerOpen}
-      onClose={() => setPdfViewerOpen(false)}
-      highlight={pdfViewerHighlight}
-      title={pdfViewerTitle}
+    {/* Source viewer for citation highlighting */}
+    <SourceViewer
+      url={sourceViewerUrl}
+      open={sourceViewerOpen}
+      onClose={() => setSourceViewerOpen(false)}
+      title={sourceViewerTitle}
+      citation={sourceViewerCitation}
+      docId={sourceViewerDocId}
     />
     </TooltipProvider>
   );

@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     docling_max_pages: int = 200
     docling_max_file_size_mb: int = 100
 
+    # Cross-format selector highlighting
+    enable_cross_format_highlighting: bool = True
+
     # Access Control Layer (ACL)
     # When enabled, enforces tenant-scoped ABAC/RBAC at every pipeline stage.
     # Identity resolved from headers: X-Tenant-Id, X-User-Id, X-Roles, X-Groups
@@ -140,6 +143,7 @@ class Settings(BaseSettings):
         logger.info(f"  Redis: {self.redis_url}")
         logger.info(f"  OpenAI API Key: {'configured' if self.openai_api_key else 'NOT SET (required for embeddings)'}")
         logger.info(f"  Docling: enabled={self.docling_enabled_default}, mode={self.docling_mode}")
+        logger.info(f"  Cross-format highlighting: enabled={self.enable_cross_format_highlighting}")
         logger.info(f"  ACL: enabled={self.acl_enabled}, strict={self.acl_strict_mode}, disclosure={self.acl_disclosure_mode}")
         logger.info(f"  Debug mode: {self.debug}")
 

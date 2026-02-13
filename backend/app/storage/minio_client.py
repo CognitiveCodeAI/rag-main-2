@@ -5,6 +5,9 @@ Bucket layout:
   ├── raw/{doc_id}/{version_id}/original          # Raw uploaded file
   ├── ir/{doc_id}/{version_id}/document_ir.json   # Parsed IR
   ├── chunks/{doc_id}/{version_id}/chunks.jsonl   # Chunk records
+  ├── views/{doc_id}/{version_id}/canonical.html  # Canonical viewer artifact
+  ├── views/{doc_id}/{version_id}/source_map.json # Canonical text + node offsets
+  ├── anchors/{doc_id}/{version_id}/selectors.jsonl # Selector bundle index
   └── embeddings/{doc_id}/{version_id}/bundle.json # (Phase 2)
 
   npr-traces/
@@ -262,6 +265,111 @@ class StorageClient:
             return True
         except S3Error:
             return False
+
+    # =========================================================================
+    # Highlighting Artifacts Storage
+    # =========================================================================
+
+    def put_canonical_view(self, doc_id: str, version_id: str, html_content: str) -> str:
+        """Store canonical HTML viewer artifact."""
+        object_name = f"views/{doc_id}/{version_id}/canonical.html"
+        content = html_content.encode("utf-8")
+
+        self.client.put_object(
+            self.CORPUS_BUCKET,
+            object_name,
+            io.BytesIO(content),
+            length=len(content),
+            content_type="text/html; charset=utf-8",
+        )
+        return f"s3://{self.CORPUS_BUCKET}/{object_name}"
+
+    def get_canonical_view(self, doc_id: str, version_id: str) -> str:
+        """Retrieve canonical HTML viewer artifact."""
+        object_name = f"views/{doc_id}/{version_id}/canonical.html"
+        response = self.client.get_object(self.CORPUS_BUCKET, object_name)
+        try:
+            return response.read().decode("utf-8")
+        finally:
+            response.close()
+            response.release_conn()
+
+    def canonical_view_exists(self, doc_id: str, version_id: str) -> bool:
+        """Check whether canonical HTML artifact exists."""
+        object_name = f"views/{doc_id}/{version_id}/canonical.html"
+        try:
+            self.client.stat_object(self.CORPUS_BUCKET, object_name)
+            return True
+        except S3Error:
+            return False
+
+    def put_source_map(self, doc_id: str, version_id: str, source_map: dict[str, Any]) -> str:
+        """Store canonical source map artifact."""
+        object_name = f"views/{doc_id}/{version_id}/source_map.json"
+        content = json.dumps(source_map, ensure_ascii=False).encode("utf-8")
+
+        self.client.put_object(
+            self.CORPUS_BUCKET,
+            object_name,
+            io.BytesIO(content),
+            length=len(content),
+            content_type="application/json",
+        )
+        return f"s3://{self.CORPUS_BUCKET}/{object_name}"
+
+    def get_source_map(self, doc_id: str, version_id: str) -> dict[str, Any]:
+        """Retrieve canonical source map artifact."""
+        object_name = f"views/{doc_id}/{version_id}/source_map.json"
+        response = self.client.get_object(self.CORPUS_BUCKET, object_name)
+        try:
+            return json.loads(response.read().decode("utf-8"))
+        finally:
+            response.close()
+            response.release_conn()
+
+    def source_map_exists(self, doc_id: str, version_id: str) -> bool:
+        """Check whether source map artifact exists."""
+        object_name = f"views/{doc_id}/{version_id}/source_map.json"
+        try:
+            self.client.stat_object(self.CORPUS_BUCKET, object_name)
+            return True
+        except S3Error:
+            return False
+
+    def put_selectors(self, doc_id: str, version_id: str, selectors: list[dict[str, Any]]) -> str:
+        """Store selector bundles as JSONL."""
+        object_name = f"anchors/{doc_id}/{version_id}/selectors.jsonl"
+        lines = [json.dumps(selector, ensure_ascii=False) for selector in selectors]
+        content = "\n".join(lines).encode("utf-8")
+
+        self.client.put_object(
+            self.CORPUS_BUCKET,
+            object_name,
+            io.BytesIO(content),
+            length=len(content),
+            content_type="application/x-ndjson",
+        )
+        return f"s3://{self.CORPUS_BUCKET}/{object_name}"
+
+    def get_selectors(self, doc_id: str, version_id: str) -> list[dict[str, Any]]:
+        """Retrieve selector bundles."""
+        object_name = f"anchors/{doc_id}/{version_id}/selectors.jsonl"
+        response = self.client.get_object(self.CORPUS_BUCKET, object_name)
+        try:
+            content = response.read().decode("utf-8")
+            return [json.loads(line) for line in content.splitlines() if line.strip()]
+        finally:
+            response.close()
+            response.release_conn()
+
+    def selectors_exist(self, doc_id: str, version_id: str) -> bool:
+        """Check whether selector bundle artifact exists."""
+        object_name = f"anchors/{doc_id}/{version_id}/selectors.jsonl"
+        try:
+            self.client.stat_object(self.CORPUS_BUCKET, object_name)
+            return True
+        except S3Error:
+            return False
     
     # =========================================================================
     # Embeddings Storage (Phase 2)
@@ -374,6 +482,8 @@ class StorageClient:
             f"raw/{doc_id}/{version_id}/",
             f"ir/{doc_id}/{version_id}/",
             f"chunks/{doc_id}/{version_id}/",
+            f"views/{doc_id}/{version_id}/",
+            f"anchors/{doc_id}/{version_id}/",
             f"embeddings/{doc_id}/{version_id}/",
         ]
         
@@ -388,6 +498,8 @@ class StorageClient:
             f"raw/{doc_id}/{version_id}/",
             f"ir/{doc_id}/{version_id}/",
             f"chunks/{doc_id}/{version_id}/",
+            f"views/{doc_id}/{version_id}/",
+            f"anchors/{doc_id}/{version_id}/",
         ]
         
         total = 0

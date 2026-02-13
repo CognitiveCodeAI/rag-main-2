@@ -134,6 +134,7 @@ def _map_docling_output(
     page_texts: Dict[int, List[str]] = {}
     page_spans: Dict[int, List[TextSpan]] = {}
     page_md_parts: Dict[int, List[str]] = {}
+    page_structural_refs: Dict[int, str] = {}
 
     # Track if this format has real page numbers
     has_real_pages = source_type in {"pdf"}
@@ -149,6 +150,12 @@ def _map_docling_output(
             page_texts[page_no] = []
             page_spans[page_no] = []
             page_md_parts[page_no] = []
+
+        # Preserve stable structural provenance handles when available.
+        if page_no not in page_structural_refs:
+            self_ref = getattr(item, "self_ref", None)
+            if self_ref is not None:
+                page_structural_refs[page_no] = str(self_ref)
 
         # Map different item types
         if item_type == "SectionHeaderItem":
@@ -200,7 +207,10 @@ def _map_docling_output(
             width=612.0,  # Default US Letter
             height=792.0,
             text_spans=page_spans.get(page_no, []),
-            meta={"source": "docling"},
+            meta={
+                "source": "docling",
+                "docling_self_ref": page_structural_refs.get(page_no),
+            },
         ))
 
     # Extract figures and tables

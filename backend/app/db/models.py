@@ -157,6 +157,31 @@ class Trace(Base):
         return f"<Trace(trace_id={self.trace_id}, status={self.status})>"
 
 
+class CitationSnapshot(Base):
+    """Immutable evidence snapshots for legal-grade citation verification."""
+
+    __tablename__ = "citation_snapshots"
+    __table_args__ = (
+        Index("ix_citation_snapshots_request_id", "request_id"),
+        Index("ix_citation_snapshots_doc_version", "doc_id", "version"),
+        Index("ix_citation_snapshots_created_at", "created_at"),
+    )
+
+    snapshot_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id = Column(String(256), nullable=False)
+    doc_id = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False)
+    node_id = Column(String(64), nullable=False)
+    selector_bundle = Column(JSONB, nullable=False)
+    exact_text = Column(Text, nullable=True)
+    answer_hash = Column(String(128), nullable=False)
+    content_hash = Column(String(128), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<CitationSnapshot(snapshot_id={self.snapshot_id}, node_id={self.node_id})>"
+
+
 class GoldenRecord(Base):
     """Golden records table - evaluation dataset records."""
     
