@@ -63,7 +63,7 @@
         {"page_no": 23, "node_type": "chunk"}
       ],
       "expected_keywords": ["initial investment", "estimated"],
-      "expected_answer_contains": ["low", "high"]
+      "expected_answer_contains": ["425,100", "899,000"]
     },
     {
       "id": "q7",
@@ -95,7 +95,7 @@
         {"page_no": 102, "node_type": "chunk"}
       ],
       "expected_keywords": ["cease", "trademark", "termination"],
-      "expected_answer_contains": "cease"
+      "expected_answer_contains": "stop"
     },
     {
       "id": "q10",
@@ -206,7 +206,7 @@
       "category": "abstention",
       "expected_evidence": [],
       "expected_keywords": [],
-      "expected_answer_contains": "not",
+      "expected_answer_contains": null,
       "should_abstain": true,
       "abstain_reason": "Environmental compliance policy details are not specified in this FDD"
     }

@@ -56,20 +56,48 @@ import {
 } from "@/components/ui/collapsible";
 import { SourceViewer } from "@/components/source-viewer";
 
-// Helper to parse inline citations like [seed:14] and render them as clickable chips
+const INLINE_CITATION_PATTERN = /\[(seed|adjacent|page):\s*(\d+)\]/gi;
+
+function normalizeInlineRef(value: string): string {
+  return value.toLowerCase().replace(/[\[\]\s]+/g, "");
+}
+
+function findCitationForInlineRef(
+  citations: Citation[] | undefined,
+  refType: string,
+  refValue: string
+): Citation | undefined {
+  if (!citations?.length) return undefined;
+
+  const normalizedRef = `${refType.toLowerCase()}:${refValue}`;
+  const byLabel = citations.find((citation) => {
+    if (!citation.label) return false;
+    const normalizedLabel = normalizeInlineRef(citation.label);
+    return normalizedLabel === normalizedRef || normalizedLabel.endsWith(normalizedRef);
+  });
+  if (byLabel) return byLabel;
+
+  const pageNo = Number.parseInt(refValue, 10);
+  if (!Number.isNaN(pageNo)) {
+    return citations.find((citation) => citation.page_no === pageNo);
+  }
+
+  return undefined;
+}
+
+// Helper to parse inline citations like [seed:14] and [adjacent:24] and render clickable chips
 function parseInlineCitations(
   content: string,
   citations: Citation[] | undefined,
   onCitationClick?: (citation: Citation) => void
 ): React.ReactNode {
-  // Pattern matches [seed:14], [seed:15], etc.
-  const citationPattern = /\[seed:(\d+)\]/g;
+  INLINE_CITATION_PATTERN.lastIndex = 0;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  let match;
+  let match: RegExpExecArray | null;
   let key = 0;
 
-  while ((match = citationPattern.exec(content)) !== null) {
+  while ((match = INLINE_CITATION_PATTERN.exec(content)) !== null) {
     // Add text before the citation
     if (match.index > lastIndex) {
       parts.push(
@@ -81,10 +109,11 @@ function parseInlineCitations(
       );
     }
 
-    const pageNo = parseInt(match[1], 10);
-    
-    // Find matching citation by page number
-    const citation = citations?.find(c => c.page_no === pageNo);
+    const refType = match[1].toLowerCase();
+    const refValue = match[2];
+    const pageNo = Number.parseInt(refValue, 10);
+    const citation = findCitationForInlineRef(citations, refType, refValue);
+    const chipLabel = refType === "page" ? `p.${refValue}` : `${refType}:${refValue}`;
     
     if (citation && onCitationClick) {
       // Render as inline clickable chip
@@ -93,10 +122,10 @@ function parseInlineCitations(
           key={`cite-${key++}`}
           onClick={() => onCitationClick(citation)}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 rounded border border-primary/20 transition-colors cursor-pointer align-baseline"
-          title={`View source: Page ${pageNo}`}
+          title={!Number.isNaN(pageNo) ? `View source: Page ${pageNo}` : `View source: ${chipLabel}`}
         >
           <FileText className="h-3 w-3" />
-          <span>p.{pageNo}</span>
+          <span>{chipLabel}</span>
         </button>
       );
     } else {
@@ -106,7 +135,7 @@ function parseInlineCitations(
           key={`cite-${key++}`}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 text-xs font-medium bg-muted text-muted-foreground rounded align-baseline"
         >
-          p.{pageNo}
+          {chipLabel}
         </span>
       );
     }

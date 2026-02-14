@@ -26,8 +26,14 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
-    print(f"🚀 Starting {settings.app_name} v{settings.app_version}")
-    print(f"📡 CORS origins: {settings.cors_origins}")
+    logger.info(
+        "%s v%s | %s | %s",
+        settings.app_name,
+        settings.app_version,
+        settings.vendor_name,
+        settings.vendor_website.replace("https://", ""),
+    )
+    logger.info("CORS origins: %s", settings.cors_origins)
     
     # Log configuration summary
     settings.log_configuration_summary()
@@ -35,16 +41,16 @@ async def lifespan(app: FastAPI):
     # Check for missing required settings
     missing = settings.validate_required_for_embeddings()
     if missing:
-        print(f"⚠️  Warning: Missing required settings: {', '.join(missing)}")
-        print("   Embedding operations will fail until these are configured.")
+        logger.warning("Missing required settings: %s", ", ".join(missing))
+        logger.warning("Embedding operations will fail until these are configured.")
     
     yield
     # Shutdown
-    print("👋 Shutting down NPR backend")
+    logger.info("Shutting down %s", settings.app_name)
 
 
 app = FastAPI(
-    title=settings.app_name,
+    title=f"{settings.app_name} — {settings.vendor_name}",
     description="Evidence-first RAG with grounded citations. Never guesses.",
     version=settings.app_version,
     lifespan=lifespan,
@@ -78,6 +84,19 @@ async def root():
         "version": settings.app_version,
         "docs": "/docs",
         "health": "/health",
+        "metadata": "/metadata",
+    }
+
+
+@app.get("/metadata", tags=["root"])
+async def metadata():
+    """Application metadata endpoint (non-sensitive)."""
+    return {
+        "app": settings.app_name,
+        "version": settings.app_version,
+        "vendor": settings.vendor_name,
+        "website": settings.vendor_website,
+        "developer": settings.vendor_developer,
     }
 
 

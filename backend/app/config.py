@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     app_name: str = "FDD - Document Intelligence"
     app_version: str = "0.1.0"
     debug: bool = True
+    vendor_name: str = "Cognitive Code"
+    vendor_website: str = "https://cognitiveCode.ai"
+    vendor_developer: str = "Larry Stewart"
     
     # Server
     host: str = "0.0.0.0"
@@ -48,6 +51,9 @@ class Settings(BaseSettings):
     # Redis (defaults match docker-compose.yml)
     redis_url: str = "redis://localhost:6379/0"
     redis_backend: str = "redis://localhost:6379/1"
+
+    # Upload guardrails
+    upload_max_file_size_mb: int = 50
     
     # OpenAI Embedding settings
     openai_api_key: str = ""  # REQUIRED for embeddings - set via OPENAI_API_KEY in .env
@@ -117,6 +123,13 @@ class Settings(BaseSettings):
         if v not in valid:
             raise ValueError(f"docling_mode must be one of {valid}, got '{v}'")
         return v
+
+    @field_validator("upload_max_file_size_mb")
+    @classmethod
+    def validate_upload_max_file_size_mb(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("upload_max_file_size_mb must be > 0")
+        return v
     
     class Config:
         env_file = ".env"
@@ -141,10 +154,15 @@ class Settings(BaseSettings):
         logger.info(f"  Milvus: {self.milvus_host}:{self.milvus_port}")
         logger.info(f"  MinIO: {self.minio_endpoint}")
         logger.info(f"  Redis: {self.redis_url}")
+        logger.info(f"  Upload max file size: {self.upload_max_file_size_mb} MB")
         logger.info(f"  OpenAI API Key: {'configured' if self.openai_api_key else 'NOT SET (required for embeddings)'}")
         logger.info(f"  Docling: enabled={self.docling_enabled_default}, mode={self.docling_mode}")
         logger.info(f"  Cross-format highlighting: enabled={self.enable_cross_format_highlighting}")
         logger.info(f"  ACL: enabled={self.acl_enabled}, strict={self.acl_strict_mode}, disclosure={self.acl_disclosure_mode}")
+        if not self.acl_enabled:
+            logger.warning(
+                "ACL is disabled. Authorization checks are bypassed until ACL_ENABLED=true."
+            )
         logger.info(f"  Debug mode: {self.debug}")
 
 

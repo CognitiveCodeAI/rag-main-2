@@ -175,12 +175,16 @@ class GraphIngestionPipeline:
             pdf_bytes = raw_bytes
         if pdf_bytes is None:
             raise ValueError("Either pdf_bytes or raw_bytes must be provided")
+        # FRAGILE COUPLING:
+        # doc_id is source-uri-derived while content_hash is content-derived; changing either scheme breaks historical dedupe mapping.
         # 1. Compute IDs
         doc_id = compute_doc_id(source_uri)
         content_hash = compute_content_hash(pdf_bytes)
         
         logger.info(f"Ingesting document: doc_id={doc_id}, uri={source_uri}")
         
+        # ORDER DEPENDENCY:
+        # Keep retry idempotency check before content-registry upsert to avoid alias_count inflation on replays.
         # 2. Idempotency check
         if not force_reprocess:
             exists, existing_version = self.idempotency.document_exists(doc_id, content_hash)
@@ -189,6 +193,8 @@ class GraphIngestionPipeline:
                 # Return existing info without reprocessing
                 return self._get_existing_result(doc_id, existing_version, source_uri)
         
+        # DATA INTEGRITY:
+        # Content registry write is expected to share the ingest transaction; committing it separately can orphan canonical pointers.
         # 3. Resolve content identity (prevents logical duplicates across different paths)
         content_identity = self.content_registry.resolve_or_register(
             content_hash=content_hash,
@@ -198,6 +204,8 @@ class GraphIngestionPipeline:
         )
         canonical_doc_id = content_identity.canonical_doc_id
         
+        # INVARIANT:
+        # Duplicate-content ingests must stop here; creating nodes/edges for aliases corrupts canonical retrieval semantics.
         # Handle content duplicate (alias) - skip node/edge creation, reuse canonical
         if content_identity.is_duplicate:
             logger.info(
@@ -269,6 +277,8 @@ class GraphIngestionPipeline:
             version=version
         )
 
+        # FRAGILE COUPLING:
+        # Backend dispatch changes extracted figure identity; downstream edge/link stability depends on this branch remaining deterministic.
         # Create figure nodes: use appropriate function based on backend
         if backend_used == "docling":
             figure_nodes = create_figure_nodes_from_data(
@@ -294,6 +304,8 @@ class GraphIngestionPipeline:
         # 10. Build canonical highlighting selectors/artifacts
         highlight_artifacts: Optional[Dict[str, Any]] = None
         try:
+            # ORDER DEPENDENCY:
+            # Selector bundles must be attached pre-persist so node.meta and snapshot hydration stay in lockstep.
             # Build selector bundles and attach to node.meta before persistence.
             temp_doc = DocumentGraph(
                 doc_id=doc_id,
@@ -362,11 +374,15 @@ class GraphIngestionPipeline:
             policy_version=1,
         )
         
+        # ORDER DEPENDENCY:
+        # DB commit establishes canonical graph state; storage writes below are non-authoritative side effects.
         # 14. Persist to database
         if stage_callback:
             stage_callback("persisting")
         self._persist(doc, all_nodes, edges)
 
+        # SIDE EFFECT:
+        # Artifact persistence is best-effort; consumers must tolerate missing/stale selector blobs after successful ingest.
         # 15. Persist highlight artifacts to object storage (non-fatal)
         if highlight_artifacts:
             try:
@@ -438,6 +454,8 @@ class GraphIngestionPipeline:
             request_override=self.ingestion_backend,
         )
 
+        # WARNING:
+        # Docling failures intentionally degrade to native extraction; converting this to hard-fail changes ingestion SLO and retry behavior.
         if backend == "docling":
             try:
                 from .docling_adapter import convert_with_docling
@@ -512,6 +530,8 @@ class GraphIngestionPipeline:
         if not metadata_overrides:
             return metadata
 
+        # SECURITY ASSUMPTION:
+        # User-provided overrides are constrained to this allowlist; expanding it can mutate system-derived retrieval fields.
         allowed_fields = {
             "doc_date",
             "year",
@@ -574,6 +594,8 @@ class GraphIngestionPipeline:
             edges: Edge records
         """
         try:
+            # ORDER DEPENDENCY:
+            # Flush doc then nodes before edges to surface FK/uniqueness failures before final commit.
             # Add document
             self.db.add(doc)
             self.db.flush()  # Get doc_id constraint check early
@@ -607,6 +629,8 @@ class GraphIngestionPipeline:
             nodes: List of nodes to update
             metadata_fields: Metadata fields to propagate (year, doc_type, etc.)
         """
+        # PERFORMANCE COUPLING:
+        # Retrieval boosting reads node.meta at query time; dropping this propagation silently reduces ranking quality.
         for node in nodes:
             if node.meta is None:
                 node.meta = {}
@@ -803,6 +827,8 @@ class GraphIngestionPipeline:
             effective_to=canonical_doc.effective_to,
         )
         
+        # DATA INTEGRITY:
+        # Alias documents intentionally persist without nodes/edges; adding graph rows here duplicates canonical content.
         # Persist alias record (no nodes, no edges)
         self.db.add(alias_doc)
         self.db.commit()

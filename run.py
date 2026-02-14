@@ -521,7 +521,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     print("=" * 55)
-    print("  NPR - Near-Perfect RAG Application")
+    print("  Near Perfect RAG | Cognitive Code | cognitiveCode.ai")
     print("=" * 55)
 
     signal.signal(signal.SIGINT, shutdown)

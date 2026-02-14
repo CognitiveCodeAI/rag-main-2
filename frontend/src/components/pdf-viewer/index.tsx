@@ -6,10 +6,9 @@
  * Enables "click citation → open doc → jump to location → highlight" functionality.
  * Uses pdfjs-dist for PDF rendering with custom highlight overlays.
  * 
- * Highlighting priority:
- * 1. bbox highlight - Direct coordinate-based highlighting (most precise)
- * 2. Text search fallback - Find anchor_snippet on page and highlight
- * 3. Page-only jump - Scroll to page when no other anchoring available
+ * Highlight rendering:
+ * 1. Verified bbox overlays
+ * 2. Verified exact quote overlays
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
@@ -22,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { 
+import {
   ChevronLeft, 
   ChevronRight, 
   ZoomIn, 
@@ -38,7 +37,6 @@ import {
   ChevronLast,
   Loader2,
   AlertCircle,
-  MapPin
 } from "lucide-react";
 
 // Configure PDF.js worker - use unpkg which has latest npm versions
@@ -48,24 +46,28 @@ if (typeof window !== "undefined") {
 
 export interface CitationHighlight {
   page_no: number;
-  bbox?: {
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-  };
-  page_size?: {
-    width: number;
-    height: number;
-  };
-  anchor_snippet?: string;
-  text?: string;
-  selector_bundle?: {
-    text_quote?: {
-      exact?: string;
-    };
-  };
-  label?: string;
+  locator:
+    | {
+        type: "bbox";
+        bbox: {
+          x0: number;
+          y0: number;
+          x1: number;
+          y1: number;
+        };
+        page_size?: {
+          width: number;
+          height: number;
+        };
+      }
+    | {
+        type: "text_offsets";
+        start: number;
+        end: number;
+      };
+  quote_text: string;
+  confidence?: number;
+  source_section?: string;
 }
 
 interface PDFViewerProps {
@@ -75,8 +77,10 @@ interface PDFViewerProps {
   open: boolean;
   /** Callback when viewer is closed */
   onClose: () => void;
-  /** Citation to highlight */
-  highlight?: CitationHighlight;
+  /** Verified evidence highlights */
+  highlights?: CitationHighlight[];
+  /** Resolver failure reason */
+  evidenceFailureMessage?: string | null;
   /** Document title for header */
   title?: string;
 }
@@ -95,14 +99,6 @@ function normalizeForSearch(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
-}
-
-function sanitizeCitationSearchText(value: string): string {
-  let cleaned = normalizeForSearch(value);
-  // Remove common page-number prefixes that cause false hits in footers.
-  cleaned = cleaned.replace(/^page\s+\d+\s+/, "");
-  cleaned = cleaned.replace(/^\d+\s+/, "");
-  return cleaned.trim();
 }
 
 function mergeHighlightsByLine(rects: TextHighlightRect[]): TextHighlightRect[] {
@@ -144,7 +140,14 @@ function mergeHighlightsByLine(rects: TextHighlightRect[]): TextHighlightRect[] 
   return merged;
 }
 
-export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerProps) {
+export function PDFViewer({
+  url,
+  open,
+  onClose,
+  highlights = [],
+  evidenceFailureMessage,
+  title,
+}: PDFViewerProps) {
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [numPages, setNumPages] = useState(0);
@@ -154,60 +157,49 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
   const [pageInput, setPageInput] = useState("1");
   const [isFullWidth, setIsFullWidth] = useState(false);
   const [textHighlights, setTextHighlights] = useState<TextHighlightRect[]>([]);
+  const [bboxHighlights, setBboxHighlights] = useState<TextHighlightRect[]>([]);
+  const [renderFailureMessage, setRenderFailureMessage] = useState<string | null>(null);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const highlightRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-  type PDFTextContentItem = {
-    str?: string;
-  };
-  
-  const getHighlightSearchText = useCallback((source?: CitationHighlight): string | null => {
-    if (!source) return null;
+  const firstHighlightedPage = highlights[0]?.page_no || 1;
+  const highlightsForCurrentPage = React.useMemo(
+    () => highlights.filter((item) => item.page_no === currentPage),
+    [highlights, currentPage],
+  );
 
-    const candidates = [
-      source.selector_bundle?.text_quote?.exact,
-      source.text,
-      source.anchor_snippet,
-    ];
+  const toViewportRect = useCallback(
+    (
+      viewport: pdfjsLib.PageViewport,
+      bbox: { x0: number; y0: number; x1: number; y1: number },
+    ): TextHighlightRect => {
+      const [vx0, vy0, vx1, vy1] = viewport.convertToViewportRectangle([
+        bbox.x0,
+        bbox.y0,
+        bbox.x1,
+        bbox.y1,
+      ]);
+      return {
+        x: Math.max(0, Math.min(vx0, vx1)),
+        y: Math.max(0, Math.min(vy0, vy1)),
+        width: Math.abs(vx1 - vx0),
+        height: Math.abs(vy1 - vy0),
+      };
+    },
+    [],
+  );
 
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      const normalized = sanitizeCitationSearchText(candidate);
-      if (normalized.length >= 20) {
-        return normalized.slice(0, 420);
-      }
-    }
-
-    return null;
-  }, []);
-
-  const getBboxCoveragePercent = useCallback((
-    bbox: CitationHighlight["bbox"] | undefined,
-    pageSize: CitationHighlight["page_size"] | undefined,
-    viewport: pdfjsLib.PageViewport
-  ): number => {
-    if (!bbox) return 0;
-    const bboxWidth = Math.max(0, bbox.x1 - bbox.x0);
-    const bboxHeight = Math.max(0, bbox.y1 - bbox.y0);
-
-    const pageWidth = pageSize?.width ?? (viewport.viewBox[2] - viewport.viewBox[0]);
-    const pageHeight = pageSize?.height ?? (viewport.viewBox[3] - viewport.viewBox[1]);
-    if (pageWidth <= 0 || pageHeight <= 0) return 100;
-
-    return (bboxWidth * bboxHeight) / (pageWidth * pageHeight) * 100;
-  }, []);
-
-  // Find and highlight text matching a citation snippet.
-  // Defined early to avoid initialization order issues
-  const findTextHighlights = useCallback(async (
+  const findExactQuoteHighlights = useCallback(async (
     page: pdfjsLib.PDFPageProxy,
     viewport: pdfjsLib.PageViewport,
-    searchInput: string
+    quoteText: string,
   ): Promise<TextHighlightRect[]> => {
     try {
+      const normalizedQuote = normalizeForSearch(quoteText);
+      if (!normalizedQuote || normalizedQuote.length < 3) return [];
+
       const textContent = await page.getTextContent();
       const items = textContent.items as Array<{
         str: string;
@@ -216,7 +208,18 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
         height: number;
       }>;
 
-      const pageEntries: Array<{
+      const sortedItems = items
+        .map((item) => {
+          const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+          return { item, x, y };
+        })
+        .sort((a, b) => {
+          const yDelta = a.y - b.y;
+          if (Math.abs(yDelta) > 4) return yDelta;
+          return a.x - b.x;
+        });
+
+      const entries: Array<{
         item: {
           str: string;
           transform: number[];
@@ -226,80 +229,62 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
         start: number;
         end: number;
       }> = [];
-
       let pageText = "";
-      for (const item of items) {
-        const normalizedItem = normalizeForSearch(item.str || "");
-        if (!normalizedItem) continue;
 
-        if (pageText.length > 0) {
-          pageText += " ";
-        }
+      for (const entry of sortedItems) {
+        const normalizedItem = normalizeForSearch(entry.item.str || "");
+        if (!normalizedItem) continue;
+        if (pageText.length > 0) pageText += " ";
         const start = pageText.length;
         pageText += normalizedItem;
         const end = pageText.length;
-        pageEntries.push({ item, start, end });
+        entries.push({ item: entry.item, start, end });
       }
 
       if (!pageText) return [];
 
-      const normalizedInput = normalizeForSearch(searchInput);
-      const candidates = [
-        normalizedInput.slice(0, 420),
-        normalizedInput.slice(0, 280),
-        normalizedInput.slice(0, 180),
-        normalizedInput.slice(0, 100),
-      ]
-        .map((v) => v.trim())
-        .filter((v, i, arr) => v.length >= 20 && arr.indexOf(v) === i);
+      const matchedGroups: TextHighlightRect[][] = [];
+      let fromIndex = 0;
+      while (fromIndex < pageText.length) {
+        const matchStart = pageText.indexOf(normalizedQuote, fromIndex);
+        if (matchStart < 0) break;
+        const matchEnd = matchStart + normalizedQuote.length;
+        fromIndex = matchEnd;
 
-      let matchStart = -1;
-      let matchedText = "";
-      for (const candidate of candidates) {
-        const idx = pageText.indexOf(candidate);
-        if (idx >= 0) {
-          matchStart = idx;
-          matchedText = candidate;
-          break;
+        const rawRects: TextHighlightRect[] = [];
+        for (const entry of entries) {
+          const overlaps = entry.start < matchEnd && entry.end > matchStart;
+          if (!overlaps) continue;
+
+          const item = entry.item;
+          const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+          const [x2] = viewport.convertToViewportPoint(
+            item.transform[4] + (item.width || 0),
+            item.transform[5],
+          );
+          const width = Math.max(6, Math.abs(x2 - x));
+          const glyphHeight = Math.max(
+            10,
+            Math.abs(item.transform[3] || 0) * viewport.scale || 12 * viewport.scale,
+          );
+          rawRects.push({
+            x: Math.max(0, x),
+            y: Math.max(0, y - glyphHeight),
+            width,
+            height: Math.max(10, glyphHeight * 1.15),
+          });
+        }
+
+        matchedGroups.push(mergeHighlightsByLine(rawRects));
+        if (matchedGroups.length > 1) {
+          // Ambiguous quote on same page; fail closed.
+          return [];
         }
       }
 
-      if (matchStart < 0 || !matchedText) return [];
-      const matchEnd = matchStart + matchedText.length;
-
-      const rawRects: TextHighlightRect[] = [];
-      for (const entry of pageEntries) {
-        const overlaps = entry.start < matchEnd && entry.end > matchStart;
-        if (!overlaps) continue;
-
-        const item = entry.item;
-        const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-        const [x2] = viewport.convertToViewportPoint(
-          item.transform[4] + (item.width || 0),
-          item.transform[5]
-        );
-
-        let width = Math.abs(x2 - x);
-        const glyphHeight = Math.max(
-          10,
-          Math.abs(item.transform[3] || 0) * viewport.scale || 12 * viewport.scale
-        );
-
-        if (!Number.isFinite(width) || width < 8) {
-          width = Math.max(8, normalizeForSearch(item.str).length * glyphHeight * 0.45);
-        }
-
-        rawRects.push({
-          x: Math.max(0, x),
-          y: Math.max(0, y - glyphHeight),
-          width: Math.max(8, width),
-          height: Math.max(10, glyphHeight * 1.15),
-        });
-      }
-
-      return mergeHighlightsByLine(rawRects);
+      return matchedGroups[0] || [];
     } catch (err) {
-      console.error("Error finding text highlights:", err);
+      console.error("Error finding exact quote highlights:", err);
       return [];
     }
   }, []);
@@ -319,8 +304,8 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
         setPdf(pdfDoc);
         setNumPages(pdfDoc.numPages);
         
-        // Jump to highlighted page if specified
-        const targetPage = highlight?.page_no || 1;
+        // Jump to first verified highlight page if specified.
+        const targetPage = firstHighlightedPage;
         setCurrentPage(targetPage);
         setPageInput(String(targetPage));
         
@@ -337,44 +322,7 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
     return () => {
       cancelled = true;
     };
-  }, [url, open, highlight?.page_no]);
-
-  // Draw bbox highlight overlay (only for precise highlights)
-  const drawHighlight = useCallback((
-    viewport: pdfjsLib.PageViewport,
-    bbox: CitationHighlight["bbox"]
-  ) => {
-    if (!bbox || !highlightRef.current) return;
-
-    const [vx0, vy0, vx1, vy1] = viewport.convertToViewportRectangle([
-      bbox.x0,
-      bbox.y0,
-      bbox.x1,
-      bbox.y1,
-    ]);
-
-    const x = Math.min(vx0, vx1);
-    const y = Math.min(vy0, vy1);
-    const width = Math.abs(vx1 - vx0);
-    const height = Math.abs(vy1 - vy0);
-
-    const coveragePercent = getBboxCoveragePercent(bbox, highlight?.page_size, viewport);
-
-    // Only show bbox highlight for precise regions (<50% coverage)
-    if (coveragePercent <= 35) {
-      highlightRef.current.style.left = `${x}px`;
-      highlightRef.current.style.top = `${y}px`;
-      highlightRef.current.style.width = `${width}px`;
-      highlightRef.current.style.height = `${height}px`;
-      highlightRef.current.style.background = "rgba(250, 204, 21, 0.35)";
-      highlightRef.current.style.border = "2px solid rgb(234, 179, 8)";
-      highlightRef.current.style.borderRadius = "4px";
-      highlightRef.current.style.boxShadow = "0 0 0 4px rgba(250, 204, 21, 0.2)";
-      highlightRef.current.style.display = "block";
-    } else {
-      highlightRef.current.style.display = "none";
-    }
-  }, [getBboxCoveragePercent, highlight?.page_size]);
+  }, [url, open, firstHighlightedPage]);
 
   // Render current page
   useEffect(() => {
@@ -398,73 +346,35 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
         }).promise;
 
         // Clear previous highlights
-        setTextHighlights([]);
-        if (highlightRef.current) {
-          highlightRef.current.style.display = "none";
-        }
+        const nextTextHighlights: TextHighlightRect[] = [];
+        const nextBboxHighlights: TextHighlightRect[] = [];
 
-        // Draw highlight if on current page
-        if (highlight && highlight.page_no === currentPage) {
-          const searchText = getHighlightSearchText(highlight);
-          if (highlight.bbox) {
-            const coveragePercent = getBboxCoveragePercent(
-              highlight.bbox,
-              highlight.page_size,
-              viewport
-            );
-
-            if (coveragePercent <= 35) {
-              // Precise bbox - use coordinate-based highlighting
-              drawHighlight(viewport, highlight.bbox);
-            } else if (searchText) {
-              // Large bbox - fall back to text search highlighting
-              const highlights = await findTextHighlights(page, viewport, searchText);
-              if (highlights.length > 0) {
-                setTextHighlights(highlights);
-              } else {
-                // Last resort: keep bbox rather than showing no highlight at all.
-                drawHighlight(viewport, highlight.bbox);
-              }
-            }
-          } else if (searchText) {
-            // No bbox but have anchor_snippet - use text search
-            const highlights = await findTextHighlights(page, viewport, searchText);
-            setTextHighlights(highlights);
+        for (const item of highlightsForCurrentPage) {
+          if (item.locator.type === "bbox") {
+            nextBboxHighlights.push(toViewportRect(viewport, item.locator.bbox));
+          } else if (item.quote_text) {
+            const exactRects = await findExactQuoteHighlights(page, viewport, item.quote_text);
+            nextTextHighlights.push(...exactRects);
           }
         }
+
+        const mergedTextHighlights = mergeHighlightsByLine(nextTextHighlights);
+        setBboxHighlights(nextBboxHighlights);
+        setTextHighlights(mergedTextHighlights);
+        const hasRenderable = nextBboxHighlights.length > 0 || mergedTextHighlights.length > 0;
+        setRenderFailureMessage(
+          highlightsForCurrentPage.length > 0 && !hasRenderable
+            ? "Evidence not found on cited page"
+            : null,
+        );
       } catch (err) {
         console.error("Failed to render page:", err);
+        setRenderFailureMessage("Evidence not found on cited page");
       }
     };
 
     renderPage();
-  }, [pdf, currentPage, scale, highlight, findTextHighlights, drawHighlight, getHighlightSearchText, getBboxCoveragePercent]);
-  
-  // Text search using anchor_snippet (fallback for page navigation)
-  useEffect(() => {
-    if (!highlight?.anchor_snippet || !pdf || highlight.bbox) return;
-    
-    const searchForSnippet = async () => {
-      const snippet = highlight.anchor_snippet!.substring(0, 50).toLowerCase();
-      
-      for (let i = 1; i <= numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const text = textContent.items
-          .map((item) => (item as PDFTextContentItem).str ?? "")
-          .join(" ")
-          .toLowerCase();
-        
-        if (text.includes(snippet)) {
-          setCurrentPage(i);
-          setPageInput(String(i));
-          break;
-        }
-      }
-    };
-    
-    searchForSnippet();
-  }, [highlight, pdf, numPages]);
+  }, [pdf, currentPage, scale, highlightsForCurrentPage, findExactQuoteHighlights, toViewportRect]);
   
   // Navigation handlers
   const goToFirstPage = () => { setCurrentPage(1); setPageInput("1"); };
@@ -497,11 +407,17 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
   const zoomOut = () => setScale((s) => Math.max(0.5, s - 0.25));
   const resetZoom = () => setScale(1.0);
   
-  // Jump to citation
+  const hasHighlights = highlights.length > 0;
+  const hasBboxLocator = highlights.some((item) => item.locator.type === "bbox");
+  const visibleFailureMessage = !hasHighlights
+    ? (evidenceFailureMessage || null)
+    : renderFailureMessage;
+
+  // Jump to first verified citation span
   const jumpToCitation = () => {
-    if (highlight?.page_no) {
-      setCurrentPage(highlight.page_no);
-      setPageInput(String(highlight.page_no));
+    if (firstHighlightedPage >= 1) {
+      setCurrentPage(firstHighlightedPage);
+      setPageInput(String(firstHighlightedPage));
     }
   };
   
@@ -544,22 +460,22 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
   
   // Get highlight type badge based on available data
   const getHighlightBadge = () => {
-    if (!highlight) return null;
+    if (!hasHighlights) return null;
 
-    if (highlight.bbox) {
+    if (hasBboxLocator) {
       return (
         <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/30">
           <Target className="h-3 w-3 mr-1" />
-          Highlighted
+          Verified (BBox)
         </Badge>
       );
     }
 
-    if (highlight.anchor_snippet) {
+    if (highlights.some((item) => item.locator.type === "text_offsets")) {
       return (
         <Badge variant="secondary" className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30">
-          <MapPin className="h-3 w-3 mr-1" />
-          Text Match
+          <Target className="h-3 w-3 mr-1" />
+          Verified (Text)
         </Badge>
       );
     }
@@ -710,7 +626,7 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
           </div>
           
           {/* Citation highlight controls */}
-          {highlight && (
+          {hasHighlights && (
             <>
               <Separator orientation="vertical" className="h-6 hidden sm:block" />
               <div className="flex items-center gap-2">
@@ -724,8 +640,8 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
                       onClick={jumpToCitation}
                     >
                       <Target className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">Page {highlight.page_no}</span>
-                      <span className="sm:hidden">{highlight.page_no}</span>
+                      <span className="hidden sm:inline">Page {firstHighlightedPage}</span>
+                      <span className="sm:hidden">{firstHighlightedPage}</span>
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Jump to Citation</TooltipContent>
@@ -766,21 +682,33 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
             
             {!loading && !error && (
               <div className="relative inline-block">
+                {visibleFailureMessage && (
+                  <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                    {visibleFailureMessage}
+                  </div>
+                )}
                 <canvas
                   ref={canvasRef}
                   className="shadow-xl rounded-sm bg-white"
                   style={{ maxWidth: "100%" }}
                 />
-                {/* Bbox highlight overlay - for precise coordinates */}
-                <div
-                  ref={highlightRef}
-                  className="absolute pointer-events-none transition-all duration-300"
-                  style={{ display: "none" }}
-                />
-                {/* Text search highlight overlays - for matching anchor_snippet */}
+                {/* Bbox highlight overlays */}
+                {bboxHighlights.map((rect, i) => (
+                  <div
+                    key={`bbox-${i}`}
+                    className="absolute pointer-events-none bg-yellow-400/35 border-2 border-yellow-500 rounded-sm shadow-md z-20"
+                    style={{
+                      left: `${rect.x}px`,
+                      top: `${rect.y}px`,
+                      width: `${rect.width}px`,
+                      height: `${rect.height}px`,
+                    }}
+                  />
+                ))}
+                {/* Text highlight overlays */}
                 {textHighlights.map((rect, i) => (
                   <div
-                    key={i}
+                    key={`txt-${i}`}
                     className="absolute pointer-events-none bg-yellow-300/45 border border-yellow-500/90 rounded-sm shadow-md z-10"
                     style={{
                       left: `${rect.x}px`,
@@ -800,7 +728,7 @@ export function PDFViewer({ url, open, onClose, highlight, title }: PDFViewerPro
           <div className="px-4 py-2 border-t bg-muted/30 text-xs text-muted-foreground flex items-center justify-between">
             <span>
               Page {currentPage} of {numPages}
-              {highlight && currentPage === highlight.page_no && " • Viewing citation source"}
+              {hasHighlights && highlightsForCurrentPage.length > 0 && " • Viewing verified evidence"}
             </span>
             <span className="hidden sm:inline">
               Use arrow keys to navigate • +/- to zoom

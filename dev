@@ -1,0 +1,1091 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+FRONTEND_DIR="$ROOT_DIR/frontend"
+LOG_DIR="$ROOT_DIR/logs"
+DOCKER_COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+ENV_EXAMPLE="$BACKEND_DIR/.env.example"
+ENV_FILE="$BACKEND_DIR/.env"
+MONITOR_PID_FILE="$LOG_DIR/monitor.pid"
+MONITOR_DAEMON_LOG_FILE="$LOG_DIR/monitor-daemon.log"
+MONITOR_DAEMON_ENV_FILE="$LOG_DIR/monitor.env"
+
+info() { printf '[INFO] %s\n' "$1"; }
+ok() { printf '[OK] %s\n' "$1"; }
+warn() { printf '[WARN] %s\n' "$1"; }
+err() { printf '[ERROR] %s\n' "$1" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: ./dev <command>
+
+Commands:
+  init      Validate prerequisites and bootstrap backend/.env
+  up        Start local development environment
+  down      Stop local infrastructure
+  logs      Tail logs (default: app logs). Targets: app|infra|backend|frontend|celery|monitor
+  status    Show service and endpoint status
+  monitor   Run optional active monitor (foreground by default; --daemon supported)
+  migrate   Run backend database migrations
+  seed      Run optional development seed data setup
+  test      Run backend test suite (and frontend tests if configured)
+  reset     Reset local dev environment (asks for confirmation)
+  doctor    Diagnose local environment issues
+
+Examples:
+  ./dev init
+  ./dev up
+  ./dev up --seed
+  ./dev migrate
+  ./dev seed
+  ./dev test
+  ./dev reset --volumes
+  ./dev logs infra
+  ./dev monitor
+  ./dev monitor --daemon
+  ./dev monitor --status
+  ./dev monitor --stop
+EOF
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+version_ge() {
+  local version="$1"
+  local required_major="$2"
+  local required_minor="$3"
+  local major minor
+
+  major="$(printf '%s' "$version" | cut -d. -f1)"
+  minor="$(printf '%s' "$version" | cut -d. -f2)"
+
+  [[ "$major" =~ ^[0-9]+$ ]] || return 1
+  [[ "$minor" =~ ^[0-9]+$ ]] || minor=0
+
+  if (( major > required_major )); then
+    return 0
+  fi
+  if (( major == required_major && minor >= required_minor )); then
+    return 0
+  fi
+  return 1
+}
+
+resolve_python_cmd() {
+  if have_cmd python3; then
+    printf 'python3\n'
+    return 0
+  fi
+  if have_cmd python && python --version 2>&1 | grep -q "Python 3"; then
+    printf 'python\n'
+    return 0
+  fi
+  return 1
+}
+
+DOCKER_COMPOSE_CMD=()
+
+resolve_docker_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE_CMD=(docker compose)
+    return 0
+  fi
+  if have_cmd docker-compose; then
+    DOCKER_COMPOSE_CMD=(docker-compose)
+    return 0
+  fi
+  return 1
+}
+
+compose() {
+  if ! resolve_docker_compose; then
+    err "Docker Compose not found."
+    return 1
+  fi
+  "${DOCKER_COMPOSE_CMD[@]}" -f "$DOCKER_COMPOSE_FILE" "$@"
+}
+
+check_prereqs() {
+  local failures=0
+  local py_cmd py_ver node_ver
+
+  if py_cmd="$(resolve_python_cmd)"; then
+    py_ver="$("$py_cmd" --version 2>&1 | awk '{print $2}')"
+    if version_ge "$py_ver" 3 10; then
+      ok "Python: $py_ver"
+    else
+      err "Python 3.10+ required (found $py_ver)."
+      printf 'Next action: install Python 3.10+ and rerun ./dev init\n'
+      failures=1
+    fi
+  else
+    err "Python 3.10+ is not installed."
+    printf 'Next action: install Python 3.10+ and rerun ./dev init\n'
+    failures=1
+  fi
+
+  if have_cmd node; then
+    node_ver="$(node --version | sed 's/^v//')"
+    if version_ge "$node_ver" 18 0; then
+      ok "Node.js: $node_ver"
+    else
+      err "Node.js 18+ required (found $node_ver)."
+      printf 'Next action: install Node.js 18+ and rerun ./dev init\n'
+      failures=1
+    fi
+  else
+    err "Node.js 18+ is not installed."
+    printf 'Next action: install Node.js 18+ and rerun ./dev init\n'
+    failures=1
+  fi
+
+  if have_cmd npm; then
+    ok "npm: $(npm --version)"
+  else
+    err "npm is not installed."
+    printf 'Next action: reinstall Node.js (npm ships with Node) and rerun ./dev init\n'
+    failures=1
+  fi
+
+  if have_cmd docker; then
+    ok "Docker: $(docker --version | sed 's/, build.*//')"
+  else
+    err "Docker is not installed."
+    printf 'Next action: install Docker Desktop/Engine and rerun ./dev init\n'
+    failures=1
+  fi
+
+  if resolve_docker_compose; then
+    ok "Docker Compose available"
+  else
+    err "Docker Compose not found."
+    printf 'Next action: install Docker Compose v2 and rerun ./dev init\n'
+    failures=1
+  fi
+
+  return "$failures"
+}
+
+sync_env_file() {
+  if [[ ! -f "$ENV_EXAMPLE" ]]; then
+    err "Missing env template: $ENV_EXAMPLE"
+    return 1
+  fi
+
+  if [[ ! -f "$ENV_FILE" ]]; then
+    cp "$ENV_EXAMPLE" "$ENV_FILE"
+    ok "Created $ENV_FILE from .env.example"
+    return 0
+  fi
+
+  local added=0
+  local wrote_header=0
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    local key="${line%%=*}"
+    if ! grep -qE "^${key}=" "$ENV_FILE"; then
+      if (( wrote_header == 0 )); then
+        printf '\n# Added by ./dev init (%s)\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >>"$ENV_FILE"
+        wrote_header=1
+      fi
+      printf '%s\n' "$line" >>"$ENV_FILE"
+      added=$((added + 1))
+    fi
+  done <"$ENV_EXAMPLE"
+
+  if (( added == 0 )); then
+    ok "$ENV_FILE already contains all template keys"
+  else
+    ok "Synced $ENV_FILE with template ($added keys added, existing values preserved)"
+  fi
+}
+
+check_openai_key_notice() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 0
+  fi
+  local key
+  key="$(grep -E '^OPENAI_API_KEY=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || true)"
+  if [[ -z "$key" || "$key" == "your-openai-api-key-here" ]]; then
+    warn "OPENAI_API_KEY is not configured in backend/.env"
+    printf 'Next action: edit backend/.env and set OPENAI_API_KEY before embedding workflows\n'
+  fi
+}
+
+resolve_backend_python() {
+  local venv_python_unix="$BACKEND_DIR/venv/bin/python"
+  local venv_python_win="$BACKEND_DIR/venv/Scripts/python.exe"
+
+  if [[ -x "$venv_python_unix" ]]; then
+    printf '%s\n' "$venv_python_unix"
+    return 0
+  fi
+
+  if [[ -x "$venv_python_win" ]]; then
+    printf '%s\n' "$venv_python_win"
+    return 0
+  fi
+
+  resolve_python_cmd
+}
+
+is_pid_running() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 1
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" >/dev/null 2>&1
+}
+
+stop_monitor_daemon() {
+  local quiet="${1:-0}"
+
+  if [[ ! -f "$MONITOR_PID_FILE" ]]; then
+    if (( quiet == 0 )); then
+      warn "Monitor pid file not found; daemon is not running."
+    fi
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$MONITOR_PID_FILE" 2>/dev/null || true)"
+  if ! is_pid_running "$pid"; then
+    if (( quiet == 0 )); then
+      warn "Monitor process is not running; removing stale pid file."
+    fi
+    rm -f "$MONITOR_PID_FILE"
+    return 0
+  fi
+
+  if (( quiet == 0 )); then
+    info "Stopping monitor daemon (pid=$pid)"
+  fi
+  kill "$pid" >/dev/null 2>&1 || true
+  sleep 1
+  if is_pid_running "$pid"; then
+    if (( quiet == 0 )); then
+      warn "Monitor daemon did not stop cleanly; sending SIGKILL."
+    fi
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  fi
+
+  rm -f "$MONITOR_PID_FILE"
+  if (( quiet == 0 )); then
+    ok "Monitor daemon stopped"
+  fi
+}
+
+bootstrap_if_needed() {
+  local venv_python_unix="$BACKEND_DIR/venv/bin/python"
+  local venv_python_win="$BACKEND_DIR/venv/Scripts/python.exe"
+  local needs_bootstrap=0
+
+  if [[ ! -f "$venv_python_unix" && ! -f "$venv_python_win" ]]; then
+    needs_bootstrap=1
+  fi
+  if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+    needs_bootstrap=1
+  fi
+
+  if (( needs_bootstrap == 0 )); then
+    return 0
+  fi
+
+  info "First-run bootstrap required. Running ./setup.sh ..."
+  if ! (cd "$ROOT_DIR" && bash ./setup.sh); then
+    err "Bootstrap failed."
+    printf 'Next action: inspect setup output above, then run ./dev doctor\n'
+    printf 'Where to look: docker logs via "./dev logs infra"\n'
+    return 1
+  fi
+}
+
+wait_for_services_healthy() {
+  local timeout="${DEV_INFRA_TIMEOUT_SEC:-240}"
+  local interval=3
+  local services=("$@")
+  local deadline=$((SECONDS + timeout))
+
+  if (( ${#services[@]} == 0 )); then
+    services=("postgres" "etcd" "minio-milvus" "milvus" "minio" "redis")
+  fi
+
+  info "Waiting for infrastructure health (timeout: ${timeout}s)"
+  while (( SECONDS < deadline )); do
+    local pending=0
+    local states=()
+    local svc
+
+    for svc in "${services[@]}"; do
+      local cid state health
+      cid="$(compose ps -q "$svc" 2>/dev/null || true)"
+
+      if [[ -z "$cid" ]]; then
+        states+=("$svc=missing")
+        pending=1
+        continue
+      fi
+
+      state="$(docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || echo "unknown")"
+      health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo "unknown")"
+
+      if [[ "$state" != "running" ]]; then
+        states+=("$svc=$state")
+        pending=1
+        continue
+      fi
+
+      if [[ "$health" == "healthy" || "$health" == "none" ]]; then
+        continue
+      fi
+
+      if [[ "$health" == "unhealthy" ]]; then
+        err "Infrastructure service is unhealthy: $svc"
+        printf 'Next action: run ./dev logs infra and inspect %s container health failures\n' "$svc"
+        return 1
+      fi
+
+      states+=("$svc=$health")
+      pending=1
+    done
+
+    if (( pending == 0 )); then
+      ok "Infrastructure services are healthy"
+      return 0
+    fi
+
+    info "Still waiting: ${states[*]}"
+    sleep "$interval"
+  done
+
+  err "Infrastructure did not become healthy within ${timeout}s."
+  printf 'Next action: run ./dev logs infra and docker compose ps\n'
+  printf 'Where to look: container health and startup errors for postgres/milvus/minio/redis\n'
+  return 1
+}
+
+run_migrations() {
+  local backend_py
+  if ! backend_py="$(resolve_backend_python)"; then
+    err "Unable to find a Python interpreter for backend migrations."
+    printf 'Next action: run ./dev init\n'
+    return 1
+  fi
+
+  info "Running database migrations"
+  if ! (cd "$BACKEND_DIR" && PATH="$(dirname "$backend_py"):$PATH" "$backend_py" -m scripts.setup.setup_postgres); then
+    err "Migration step failed."
+    printf 'Next action: inspect migration errors above, then rerun ./dev up\n'
+    printf 'Where to look: backend migration output and ./dev logs infra\n'
+    return 1
+  fi
+  ok "Migrations complete"
+}
+
+run_seed_data() {
+  local backend_py
+  local candidate
+
+  if ! backend_py="$(resolve_backend_python)"; then
+    err "Unable to find a Python interpreter for seed execution."
+    printf 'Next action: run ./dev init\n'
+    return 1
+  fi
+
+  if [[ -n "${DEV_SEED_CMD:-}" ]]; then
+    info "Running seed command from DEV_SEED_CMD"
+    if ! (cd "$ROOT_DIR" && bash -lc "$DEV_SEED_CMD"); then
+      err "DEV_SEED_CMD failed."
+      printf 'Next action: fix DEV_SEED_CMD and rerun ./dev seed\n'
+      return 1
+    fi
+    ok "Seed complete"
+    return 0
+  fi
+
+  for candidate in \
+    "$BACKEND_DIR/scripts/seed_dev.py" \
+    "$BACKEND_DIR/scripts/seed.py" \
+    "$BACKEND_DIR/scripts/setup/seed_dev.py" \
+    "$BACKEND_DIR/scripts/setup/seed.py"; do
+    if [[ -f "$candidate" ]]; then
+      info "Running seed script: ${candidate#$ROOT_DIR/}"
+      if ! (cd "$BACKEND_DIR" && PATH="$(dirname "$backend_py"):$PATH" "$backend_py" "${candidate#$BACKEND_DIR/}"); then
+        err "Seed script failed."
+        printf 'Next action: inspect the seed error above and rerun ./dev seed\n'
+        return 1
+      fi
+      ok "Seed complete"
+      return 0
+    fi
+  done
+
+  err "No seed script is configured for this repository."
+  printf 'Next action: add backend/scripts/seed_dev.py or set DEV_SEED_CMD, then rerun ./dev seed\n'
+  return 1
+}
+
+run_backend_tests() {
+  local backend_py
+  if ! backend_py="$(resolve_backend_python)"; then
+    err "Unable to find a Python interpreter for backend tests."
+    printf 'Next action: run ./dev init\n'
+    return 1
+  fi
+
+  info "Running backend tests (pytest)"
+  if ! (cd "$BACKEND_DIR" && PATH="$(dirname "$backend_py"):$PATH" "$backend_py" -m pytest); then
+    err "Backend tests failed."
+    printf 'Next action: inspect pytest output above and fix failures\n'
+    return 1
+  fi
+  ok "Backend tests passed"
+}
+
+run_frontend_tests_if_configured() {
+  if ! have_cmd node || ! have_cmd npm; then
+    warn "Skipping frontend tests (node/npm unavailable)"
+    return 0
+  fi
+
+  if ! (cd "$FRONTEND_DIR" && node -e 'const pkg=require("./package.json"); process.exit(pkg.scripts && pkg.scripts.test ? 0 : 1)'); then
+    info "No frontend test script configured; skipping"
+    return 0
+  fi
+
+  info "Running frontend tests"
+  if ! (cd "$FRONTEND_DIR" && npm test -- --watch=false); then
+    err "Frontend tests failed."
+    printf 'Next action: inspect frontend test output above and fix failures\n'
+    return 1
+  fi
+  ok "Frontend tests passed"
+}
+
+check_http() {
+  local label="$1"
+  local url="$2"
+  if ! have_cmd curl; then
+    warn "$label check skipped (curl not installed)"
+    return 0
+  fi
+  if curl -fsS "$url" >/dev/null; then
+    ok "$label reachable: $url"
+    return 0
+  else
+    warn "$label unreachable: $url"
+    return 1
+  fi
+}
+
+cmd_init() {
+  info "Running prerequisite checks"
+  if ! check_prereqs; then
+    err "Prerequisite check failed."
+    return 1
+  fi
+
+  info "Bootstrapping backend environment file"
+  sync_env_file
+  check_openai_key_notice
+
+  ok "Init complete"
+}
+
+cmd_migrate() {
+  cmd_init
+
+  info "Ensuring PostgreSQL is running"
+  if ! compose up -d postgres; then
+    err "Failed to start PostgreSQL for migration."
+    printf 'Next action: run ./dev logs infra\n'
+    return 1
+  fi
+
+  if ! wait_for_services_healthy postgres; then
+    return 1
+  fi
+
+  run_migrations
+}
+
+cmd_seed() {
+  cmd_init
+
+  info "Ensuring infrastructure is running"
+  if ! compose up -d; then
+    err "Failed to start infrastructure for seeding."
+    printf 'Next action: run ./dev logs infra\n'
+    return 1
+  fi
+
+  if ! wait_for_services_healthy; then
+    return 1
+  fi
+
+  if ! run_migrations; then
+    return 1
+  fi
+
+  run_seed_data
+}
+
+cmd_test() {
+  cmd_init
+  bootstrap_if_needed
+
+  if ! run_backend_tests; then
+    return 1
+  fi
+
+  run_frontend_tests_if_configured
+}
+
+cmd_up() {
+  local py_cmd
+  local run_seed=0
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --seed) run_seed=1 ;;
+      *)
+        err "Unknown up option: $1"
+        printf 'Valid up options: --seed\n'
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  cmd_init
+
+  if ! py_cmd="$(resolve_python_cmd)"; then
+    err "Python 3 is required to run the launcher."
+    return 1
+  fi
+
+  bootstrap_if_needed
+
+  info "Starting infrastructure"
+  if ! compose up -d; then
+    err "Failed to start infrastructure."
+    printf 'Next action: run ./dev doctor\n'
+    printf 'Where to look: ./dev logs infra\n'
+    return 1
+  fi
+
+  if ! wait_for_services_healthy; then
+    return 1
+  fi
+
+  if ! run_migrations; then
+    return 1
+  fi
+
+  if (( run_seed == 1 )); then
+    if ! run_seed_data; then
+      return 1
+    fi
+  fi
+
+  info "Success URLs"
+  printf '  Frontend:    http://localhost:3000\n'
+  printf '  Backend API: http://localhost:8000\n'
+  printf '  API docs:    http://localhost:8000/docs\n'
+  printf '  Verify:      ./dev status\n'
+
+  info "Starting application services"
+  exec "$py_cmd" "$ROOT_DIR/run.py" --skip-infra-check
+}
+
+cmd_down() {
+  stop_monitor_daemon 1
+
+  info "Stopping infrastructure"
+  if compose down; then
+    ok "Infrastructure stopped"
+  else
+    err "Failed to stop infrastructure."
+    printf 'Next action: run "docker ps" and stop containers manually\n'
+    return 1
+  fi
+
+  if have_cmd lsof; then
+    if lsof -nP -iTCP:3000 -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then
+      warn "Listeners still active on ports 3000/8000."
+      printf 'Next action: stop the terminal running "./dev up" with Ctrl+C\n'
+    fi
+  fi
+}
+
+cmd_reset() {
+  local wipe_volumes=0
+  local assume_yes=0
+  local answer
+  local path
+  local cleanup_paths=(
+    "$LOG_DIR"
+    "$BACKEND_DIR/venv"
+    "$BACKEND_DIR/.pytest_cache"
+    "$FRONTEND_DIR/node_modules"
+    "$FRONTEND_DIR/.next"
+  )
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --volumes) wipe_volumes=1 ;;
+      --yes|-y) assume_yes=1 ;;
+      *)
+        err "Unknown reset option: $1"
+        printf 'Valid reset options: --volumes --yes\n'
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  printf '[WARN] Reset will remove local artifacts (venv, node_modules, logs, .next).\n'
+  if (( wipe_volumes == 1 )); then
+    printf '[WARN] Docker volumes will also be removed (database/object storage data loss).\n'
+  fi
+
+  if (( assume_yes == 0 )); then
+    printf 'Type RESET to continue: '
+    read -r answer
+    if [[ "$answer" != "RESET" ]]; then
+      info "Reset cancelled."
+      return 1
+    fi
+  fi
+
+  info "Stopping infrastructure"
+  if (( wipe_volumes == 1 )); then
+    if ! compose down -v --remove-orphans; then
+      err "Failed to stop/remove infrastructure volumes."
+      printf 'Next action: run docker compose down -v --remove-orphans manually\n'
+      return 1
+    fi
+  else
+    if ! compose down --remove-orphans; then
+      err "Failed to stop infrastructure."
+      printf 'Next action: run docker compose down --remove-orphans manually\n'
+      return 1
+    fi
+  fi
+
+  info "Removing local artifacts"
+  for path in "${cleanup_paths[@]}"; do
+    if [[ -e "$path" ]]; then
+      rm -rf "$path"
+      ok "Removed ${path#$ROOT_DIR/}"
+    fi
+  done
+
+  ok "Reset complete"
+  printf 'Next action: run ./dev init then ./dev up\n'
+}
+
+cmd_status() {
+  info "Infrastructure containers"
+  if resolve_docker_compose; then
+    compose ps
+  else
+    warn "Docker Compose not available; cannot show container status"
+  fi
+
+  printf '\n'
+  info "Application endpoints"
+  check_http "Backend liveness" "http://localhost:8000/health/live"
+  check_http "Backend readiness" "http://localhost:8000/health/ready"
+  check_http "Frontend" "http://localhost:3000"
+
+  printf '\n'
+  info "Active monitor"
+  local monitor_pid_running=0
+
+  if [[ -f "$MONITOR_PID_FILE" ]]; then
+    local monitor_pid
+    monitor_pid="$(cat "$MONITOR_PID_FILE" 2>/dev/null || true)"
+    if is_pid_running "$monitor_pid"; then
+      ok "Monitor daemon process detected (pid=$monitor_pid)"
+      monitor_pid_running=1
+    else
+      warn "Monitor pid file exists but process is not running"
+      printf 'Next action: run ./dev monitor --daemon\n'
+    fi
+  else
+    info "Monitor daemon not running (no pid file)"
+  fi
+
+  local backend_py
+  if ! backend_py="$(resolve_backend_python)"; then
+    warn "Backend Python not found; cannot query monitor status"
+    printf 'Next action: run ./dev init\n'
+    return 0
+  fi
+
+  if (( monitor_pid_running == 1 )) && [[ -f "$MONITOR_DAEMON_ENV_FILE" ]]; then
+    (
+      cd "$BACKEND_DIR"
+      set -a
+      # shellcheck source=/dev/null
+      source "$MONITOR_DAEMON_ENV_FILE"
+      set +a
+      PATH="$(dirname "$backend_py"):$PATH" "$backend_py" -m scripts.monitor status
+    ) || warn "Unable to query monitor status from backend scripts.monitor"
+  else
+    (
+      cd "$BACKEND_DIR"
+      PATH="$(dirname "$backend_py"):$PATH" "$backend_py" -m scripts.monitor status
+    ) || warn "Unable to query monitor status from backend scripts.monitor"
+  fi
+}
+
+cmd_monitor() {
+  local daemon=0
+  local once=0
+  local show_status=0
+  local stop_daemon=0
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --daemon) daemon=1 ;;
+      --once) once=1 ;;
+      --status) show_status=1 ;;
+      --stop) stop_daemon=1 ;;
+      *)
+        err "Unknown monitor option: $1"
+        printf 'Valid monitor options: --daemon --once --status --stop\n'
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  if (( daemon == 1 && once == 1 )); then
+    err "--daemon and --once cannot be used together"
+    return 1
+  fi
+
+  local backend_py
+  if ! backend_py="$(resolve_backend_python)"; then
+    err "Unable to find backend Python for monitor command."
+    printf 'Next action: run ./dev init (or ./setup.sh)\n'
+    return 1
+  fi
+
+  if (( stop_daemon == 1 )); then
+    stop_monitor_daemon 0
+    return 0
+  fi
+
+  if (( show_status == 1 )); then
+    local pid_running=0
+    if [[ -f "$MONITOR_PID_FILE" ]]; then
+      local status_pid
+      status_pid="$(cat "$MONITOR_PID_FILE" 2>/dev/null || true)"
+      if is_pid_running "$status_pid"; then
+        pid_running=1
+      fi
+    fi
+
+    if (( pid_running == 1 )) && [[ -f "$MONITOR_DAEMON_ENV_FILE" ]]; then
+      (
+        cd "$BACKEND_DIR"
+        set -a
+        # shellcheck source=/dev/null
+        source "$MONITOR_DAEMON_ENV_FILE"
+        set +a
+        PATH="$(dirname "$backend_py"):$PATH" "$backend_py" -m scripts.monitor status
+      )
+    else
+      (
+        cd "$BACKEND_DIR"
+        PATH="$(dirname "$backend_py"):$PATH" "$backend_py" -m scripts.monitor status
+      )
+    fi
+    return $?
+  fi
+
+  local monitor_enabled="${MONITOR_ENABLED:-true}"
+  local monitor_mode="${MONITOR_MODE:-observe}"
+  local monitor_dry_run="${MONITOR_DRY_RUN:-false}"
+  local monitor_interval="${MONITOR_INTERVAL_SECONDS:-15}"
+  local monitor_retries="${MONITOR_MAX_RETRIES:-3}"
+  local monitor_backoff="${MONITOR_BACKOFF_SECONDS:-10}"
+  local monitor_cb_threshold="${MONITOR_CIRCUIT_BREAKER_THRESHOLD:-5}"
+
+  if (( daemon == 1 )); then
+    mkdir -p "$LOG_DIR"
+
+    if [[ -f "$MONITOR_PID_FILE" ]]; then
+      local existing_pid
+      existing_pid="$(cat "$MONITOR_PID_FILE" 2>/dev/null || true)"
+      if is_pid_running "$existing_pid"; then
+        warn "Monitor daemon is already running (pid=$existing_pid)."
+        printf 'Next action: run ./dev monitor --status (or ./dev monitor --stop)\n'
+        return 0
+      fi
+      rm -f "$MONITOR_PID_FILE"
+    fi
+
+    cat >"$MONITOR_DAEMON_ENV_FILE" <<EOF
+MONITOR_ENABLED=$monitor_enabled
+MONITOR_MODE=$monitor_mode
+MONITOR_DRY_RUN=$monitor_dry_run
+MONITOR_INTERVAL_SECONDS=$monitor_interval
+MONITOR_MAX_RETRIES=$monitor_retries
+MONITOR_BACKOFF_SECONDS=$monitor_backoff
+MONITOR_CIRCUIT_BREAKER_THRESHOLD=$monitor_cb_threshold
+EOF
+
+    info "Starting monitor daemon"
+    (
+      cd "$BACKEND_DIR"
+      MONITOR_ENABLED="$monitor_enabled" \
+      MONITOR_MODE="$monitor_mode" \
+      MONITOR_DRY_RUN="$monitor_dry_run" \
+      MONITOR_INTERVAL_SECONDS="$monitor_interval" \
+      MONITOR_MAX_RETRIES="$monitor_retries" \
+      MONITOR_BACKOFF_SECONDS="$monitor_backoff" \
+      MONITOR_CIRCUIT_BREAKER_THRESHOLD="$monitor_cb_threshold" \
+      PATH="$(dirname "$backend_py"):$PATH" \
+      nohup "$backend_py" -m scripts.monitor run >>"$MONITOR_DAEMON_LOG_FILE" 2>&1 &
+      echo $! >"$MONITOR_PID_FILE"
+    )
+
+    sleep 1
+    local started_pid
+    started_pid="$(cat "$MONITOR_PID_FILE" 2>/dev/null || true)"
+    if is_pid_running "$started_pid"; then
+      ok "Monitor daemon started (pid=$started_pid)"
+      printf '  Status: ./dev monitor --status\n'
+      printf '  Stop:   ./dev monitor --stop\n'
+      printf '  Logs:   tail -f %s\n' "$MONITOR_DAEMON_LOG_FILE"
+      return 0
+    fi
+
+    err "Monitor daemon failed to start."
+    printf 'Next action: inspect %s\n' "$MONITOR_DAEMON_LOG_FILE"
+    return 1
+  fi
+
+  local monitor_args=(run)
+  if (( once == 1 )); then
+    monitor_args+=(--once)
+  fi
+
+  info "Running monitor in foreground (Ctrl+C to stop)"
+  (
+    cd "$BACKEND_DIR"
+    MONITOR_ENABLED="$monitor_enabled" \
+    MONITOR_MODE="$monitor_mode" \
+    MONITOR_DRY_RUN="$monitor_dry_run" \
+    MONITOR_INTERVAL_SECONDS="$monitor_interval" \
+    MONITOR_MAX_RETRIES="$monitor_retries" \
+    MONITOR_BACKOFF_SECONDS="$monitor_backoff" \
+    MONITOR_CIRCUIT_BREAKER_THRESHOLD="$monitor_cb_threshold" \
+    PATH="$(dirname "$backend_py"):$PATH" \
+    "$backend_py" -m scripts.monitor "${monitor_args[@]}"
+  )
+}
+
+cmd_logs() {
+  local target="${1:-app}"
+
+  case "$target" in
+    infra)
+      compose logs -f
+      ;;
+    app)
+      local files=()
+      [[ -f "$LOG_DIR/backend.log" ]] && files+=("$LOG_DIR/backend.log")
+      [[ -f "$LOG_DIR/frontend.log" ]] && files+=("$LOG_DIR/frontend.log")
+      [[ -f "$LOG_DIR/celery.log" ]] && files+=("$LOG_DIR/celery.log")
+      if (( ${#files[@]} == 0 )); then
+        err "No app log files found in $LOG_DIR"
+        printf 'Next action: run ./dev up, then run ./dev logs app\n'
+        return 1
+      fi
+      tail -n 100 -f "${files[@]}"
+      ;;
+    backend|frontend|celery)
+      local file="$LOG_DIR/${target}.log"
+      if [[ ! -f "$file" ]]; then
+        err "Log file not found: $file"
+        printf 'Next action: run ./dev up, then rerun ./dev logs %s\n' "$target"
+        return 1
+      fi
+      tail -n 100 -f "$file"
+      ;;
+    monitor)
+      if [[ ! -f "$MONITOR_DAEMON_LOG_FILE" ]]; then
+        err "Monitor daemon log file not found: $MONITOR_DAEMON_LOG_FILE"
+        printf 'Next action: run ./dev monitor --daemon, then rerun ./dev logs monitor\n'
+        return 1
+      fi
+      tail -n 100 -f "$MONITOR_DAEMON_LOG_FILE"
+      ;;
+    *)
+      err "Unknown logs target: $target"
+      printf 'Valid targets: app | infra | backend | frontend | celery | monitor\n'
+      return 1
+      ;;
+  esac
+}
+
+cmd_doctor() {
+  local failures=0
+  local infra_warnings=0
+  local endpoint_warnings=0
+
+  info "Doctor: prerequisite checks"
+  if ! check_prereqs; then
+    failures=$((failures + 1))
+  fi
+
+  if [[ -f "$DOCKER_COMPOSE_FILE" ]]; then
+    ok "Found docker compose file"
+  else
+    err "Missing docker compose file: $DOCKER_COMPOSE_FILE"
+    printf 'Next action: restore docker-compose.yml, then rerun ./dev doctor\n'
+    failures=$((failures + 1))
+  fi
+
+  if [[ -f "$ROOT_DIR/run.py" ]]; then
+    ok "Found app launcher (run.py)"
+  else
+    err "Missing launcher: $ROOT_DIR/run.py"
+    printf 'Next action: restore run.py, then rerun ./dev doctor\n'
+    failures=$((failures + 1))
+  fi
+
+  if have_cmd docker; then
+    if docker info >/dev/null 2>&1; then
+      ok "Docker daemon reachable"
+    else
+      err "Docker daemon is not reachable."
+      printf 'Next action: start Docker Desktop/Engine, then rerun ./dev doctor\n'
+      failures=$((failures + 1))
+    fi
+  fi
+
+  if resolve_docker_compose; then
+    if compose config -q >/dev/null 2>&1; then
+      ok "Docker compose config is valid"
+    else
+      err "Docker compose config is invalid."
+      printf 'Next action: run "docker compose -f docker-compose.yml config" and fix errors\n'
+      failures=$((failures + 1))
+    fi
+  fi
+
+  if [[ -f "$ENV_FILE" ]]; then
+    ok "Found backend/.env"
+  else
+    err "Missing backend/.env"
+    printf 'Next action: run ./dev init\n'
+    failures=$((failures + 1))
+  fi
+
+  check_openai_key_notice
+
+  if [[ -x "$BACKEND_DIR/venv/bin/python" || -x "$BACKEND_DIR/venv/Scripts/python.exe" ]]; then
+    ok "Backend virtual environment detected"
+  else
+    warn "Backend virtual environment not found"
+    printf 'Next action: run ./dev up (or ./setup.sh) to bootstrap backend dependencies\n'
+    infra_warnings=$((infra_warnings + 1))
+  fi
+
+  if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
+    ok "Frontend dependencies detected"
+  else
+    warn "Frontend node_modules missing"
+    printf 'Next action: run ./dev up (or cd frontend && npm install)\n'
+    infra_warnings=$((infra_warnings + 1))
+  fi
+
+  if resolve_docker_compose && docker info >/dev/null 2>&1; then
+    local services=("postgres" "etcd" "minio-milvus" "milvus" "minio" "redis")
+    local svc
+    for svc in "${services[@]}"; do
+      local cid state health
+      cid="$(compose ps -q "$svc" 2>/dev/null || true)"
+      if [[ -z "$cid" ]]; then
+        warn "Service not running: $svc"
+        infra_warnings=$((infra_warnings + 1))
+        continue
+      fi
+      state="$(docker inspect --format '{{.State.Status}}' "$cid" 2>/dev/null || true)"
+      health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' "$cid" 2>/dev/null || true)"
+      if [[ "$state" == "running" && ( "$health" == "healthy" || "$health" == "none" ) ]]; then
+        ok "$svc is running (health: $health)"
+      else
+        warn "$svc state=$state (health: $health)"
+        infra_warnings=$((infra_warnings + 1))
+      fi
+    done
+  fi
+
+  printf '\n'
+  info "Doctor: endpoint checks"
+  if ! check_http "Backend liveness" "http://localhost:8000/health/live"; then
+    endpoint_warnings=$((endpoint_warnings + 1))
+  fi
+  if ! check_http "Backend readiness" "http://localhost:8000/health/ready"; then
+    endpoint_warnings=$((endpoint_warnings + 1))
+  fi
+  if ! check_http "Frontend" "http://localhost:3000"; then
+    endpoint_warnings=$((endpoint_warnings + 1))
+  fi
+
+  if (( infra_warnings > 0 || endpoint_warnings > 0 )); then
+    printf '\n'
+    warn "Doctor found non-blocking issues."
+    printf 'Next action: run ./dev up, then rerun ./dev doctor\n'
+    printf 'Where to look: ./dev logs infra and ./dev logs app\n'
+  fi
+
+  printf '\n'
+  info "Verify local success"
+  printf '  1) ./dev status\n'
+  printf '  2) Open http://localhost:3000\n'
+  printf '  3) Open http://localhost:8000/health/ready\n'
+
+  if (( failures > 0 )); then
+    err "Doctor found blocking issues."
+    return 1
+  fi
+  ok "Doctor checks complete"
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+
+  case "$cmd" in
+    init) cmd_init "$@" ;;
+    up) cmd_up "$@" ;;
+    down) cmd_down "$@" ;;
+    logs) cmd_logs "$@" ;;
+    status) cmd_status "$@" ;;
+    monitor) cmd_monitor "$@" ;;
+    migrate) cmd_migrate "$@" ;;
+    seed) cmd_seed "$@" ;;
+    test) cmd_test "$@" ;;
+    reset) cmd_reset "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    help|-h|--help) usage ;;
+    *)
+      err "Unknown command: $cmd"
+      usage
+      return 1
+      ;;
+  esac
+}
+
+main "$@"

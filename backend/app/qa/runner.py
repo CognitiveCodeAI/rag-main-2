@@ -36,8 +36,10 @@ from app.services.document_identity import find_legacy_for_graph
 from app.services.highlighting import (
     ensure_highlight_artifacts,
     resolve_citation_selector,
+    verify_evidence_span,
 )
 from app.storage.minio_client import get_storage_client
+from .evidence_span import build_evidence_spans
 from .normalizer import normalize_query, NormalizedQuery
 from .section_booster import SectionBooster, SectionBoostResult
 from .constraint_parser import parse_constraints, ParsedConstraints
@@ -508,6 +510,8 @@ Return JSON only in the following format:
         self.llm_client = llm_client or OpenAIClient()
         self.vector_index = vector_index or GraphVectorIndex()
         self.embedding_client = get_embedding_client()
+        # INVARIANT:
+        # All retrieval paths must share this enforcer instance; bypassing it leaks cross-tenant evidence.
         self.acl_enforcer = ACLEnforcer(db, entitlements)
         self.expander = GraphExpander(db, acl_enforcer=self.acl_enforcer)
         self.packer = ContextPacker(max_tokens=max_context_tokens)
@@ -586,6 +590,8 @@ Return JSON only in the following format:
         Returns:
             QAResult with full audit trail
         """
+        # ORDER DEPENDENCY:
+        # Propagation mode uses separate retrieval logic; security/ranking fixes in standard mode must be mirrored there.
         # Dispatch to propagation_safety mode if requested
         if mode == "propagation_safety":
             return self._run_propagation_safety(doc_id, question, top_k, version)
@@ -722,6 +728,8 @@ Return JSON only in the following format:
             merged_results = list(all_search_results.values())
             merged_results.sort(key=lambda x: x["score"], reverse=True)
 
+            # SECURITY ASSUMPTION:
+            # Milvus filtering is advisory; this post-search gate is the first hard ACL boundary in standard QA flow.
             # ACL enforcement: post-vector-search filter
             merged_results = self.acl_enforcer.filter_search_results(
                 merged_results, stage="vector_search"
@@ -744,6 +752,8 @@ Return JSON only in the following format:
                 
                 # Fallback 1: Retry without metadata filter
                 if filter_expr:
+                    # WARNING:
+                    # This branch intentionally trades precision for recall; ACL checks must remain after every fallback stage.
                     logger.warning(f"[QA] Fallback 1: Retrying without filter_expr")
                     merged_results = self._search_without_filter(
                         doc_id=doc_id,
@@ -855,6 +865,8 @@ Return JSON only in the following format:
             result.injected_seeds = injected_audit
             result.injection_targets_detected = detected_targets
 
+            # ORDER DEPENDENCY:
+            # Structured injection can add high-priority nodes; always re-apply ACL before seed selection/rerank.
             # ACL enforcement: post-seed-injection filter
             merged_results = self.acl_enforcer.filter_search_results(
                 merged_results, stage="seed_injection"
@@ -1072,6 +1084,8 @@ Return JSON only in the following format:
                     # 3. higher rerank score
                     # 4. original boosted retrieval score
                     # 5. stable node_id sort
+                    # FRAGILE COUPLING:
+                    # Eval traces and rerank A/B comparisons assume this deterministic ordering contract.
                     reranked_results.sort(
                         key=lambda x: (
                             -int(x["must_include"]),
@@ -1112,6 +1126,8 @@ Return JSON only in the following format:
                 elif not self.enable_rerank:
                     logger.debug("[QA] Reranking disabled")
             
+            # DATA INTEGRITY:
+            # Truncating seeds here defines the expansion frontier; moving this cut earlier silently changes citations.
             # Take top_k after boosting/rerank
             merged_results = merged_results[:top_k]
             result.rerank_seed_ids = [sr["node_id"] for sr in merged_results]
@@ -1297,6 +1313,7 @@ Return JSON only in the following format:
         graph_doc_cache: Dict[str, Optional[DocumentGraph]] = {}
         legacy_cache: Dict[str, Any] = {}
         selectors_cache: Dict[str, Dict[str, dict]] = {}
+        source_map_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         attempted_backfill: set[str] = set()
 
         answer_hash = hashlib.sha256((answer_text or "").encode("utf-8")).hexdigest()
@@ -1332,6 +1349,8 @@ Return JSON only in the following format:
         for c in citations:
             node = node_map.get(c.node_id)
             
+            # DATA INTEGRITY:
+            # Page-based fallback is heuristic only; node_id remains the authoritative citation identity.
             # Fallback: if node_id didn't match (e.g., "seed"), look up by page_no
             if not node and c.page_no and c.page_no in page_to_node:
                 node = page_to_node[c.page_no]
@@ -1362,6 +1381,8 @@ Return JSON only in the following format:
             if highlighting_enabled and graph_doc and graph_key not in attempted_backfill:
                 attempted_backfill.add(graph_key)
                 try:
+                    # SIDE EFFECT:
+                    # QA read path can trigger artifact writes; callers must tolerate backfill latency and partial failures.
                     if not (
                         storage.canonical_view_exists(graph_doc.doc_id, str(graph_doc.version))
                         and storage.source_map_exists(graph_doc.doc_id, str(graph_doc.version))
@@ -1414,6 +1435,8 @@ Return JSON only in the following format:
             }
             if highlighting_enabled and graph_doc and selector_bundle:
                 start_resolve = time.time()
+                # SECURITY ASSUMPTION:
+                # strict=True and allow_fuzzy=False enforce fail-closed citation anchoring for audit/legal workflows.
                 resolve_result = resolve_citation_selector(
                     storage=storage,
                     doc=graph_doc,
@@ -1429,6 +1452,14 @@ Return JSON only in the following format:
                 exact_count += 1
             elif graph_doc and selector_bundle:
                 unresolved_count += 1
+
+            resolve_status = resolve_result.get("resolve_status", "unresolved")
+            confidence_by_status = {
+                "exact": 1.0,
+                "fuzzy": 0.8,
+                "unresolved": 0.0,
+            }
+            evidence_confidence = confidence_by_status.get(resolve_status, 0.0)
             
             citation_dict = {
                 "node_id": c.node_id,
@@ -1440,7 +1471,7 @@ Return JSON only in the following format:
                 "source_type": source_type,
                 "mime_type": mime_type,
                 "selector_bundle": selector_bundle,
-                "resolve_status": resolve_result.get("resolve_status", "unresolved"),
+                "resolve_status": resolve_status,
                 "resolve_reason": resolve_result.get("reason"),
                 "canonical_view_url": (
                     f"/v1/documents/{citation_doc_id}/canonical"
@@ -1479,10 +1510,101 @@ Return JSON only in the following format:
                 if "anchor_snippet" not in citation_dict:
                     citation_dict["anchor_snippet"] = selector_bundle["text_quote"]["exact"][:150]
 
+            citation_dict["evidence_spans"] = build_evidence_spans(
+                provided_spans=getattr(c, "evidence_spans", None),
+                doc_id=citation_doc_id,
+                page_index=citation_page_no,
+                quote_text=(
+                    citation_dict.get("text")
+                    or c.text_snippet
+                    or citation_dict.get("anchor_snippet")
+                ),
+                selector_bundle=selector_bundle,
+                bbox=citation_dict.get("bbox"),
+                page_size=citation_dict.get("page_size"),
+                confidence=evidence_confidence,
+                source_section=node.label if node and node.label else c.label,
+            )
+
+            evidence_verification: List[Dict[str, Any]] = []
+            if highlighting_enabled and graph_doc and citation_dict["evidence_spans"]:
+                source_map_key = f"{graph_doc.doc_id}:{graph_doc.version}"
+                if source_map_key not in source_map_cache:
+                    source_map_cache[source_map_key] = None
+                    if storage.source_map_exists(graph_doc.doc_id, str(graph_doc.version)):
+                        try:
+                            source_map_cache[source_map_key] = storage.get_source_map(
+                                graph_doc.doc_id,
+                                str(graph_doc.version),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[QA] Failed to load source map for evidence verification {source_map_key}: {e}"
+                            )
+                source_map = source_map_cache.get(source_map_key)
+                if source_map:
+                    for span in citation_dict["evidence_spans"]:
+                        try:
+                            verification = verify_evidence_span(
+                                doc_id=str(span.get("doc_id") or citation_doc_id or ""),
+                                page_index=int(span.get("page_index") or citation_page_no or 0),
+                                quote_text=str(span.get("quote_text") or ""),
+                                locator=span.get("locator"),
+                                source_map=source_map,
+                                allow_fuzzy=False,
+                            )
+                        except Exception as e:
+                            verification = {
+                                "status": "NOT_FOUND",
+                                "matched_locator": None,
+                                "confidence": 0.0,
+                                "reason": f"verification_error:{type(e).__name__}",
+                            }
+                        evidence_verification.append(verification)
+                else:
+                    evidence_verification.append(
+                        {
+                            "status": "NOT_FOUND",
+                            "matched_locator": None,
+                            "confidence": 0.0,
+                            "reason": "missing_source_map",
+                        }
+                    )
+
+            citation_dict["evidence_verification"] = evidence_verification
+
+            found_verification = next(
+                (v for v in evidence_verification if v.get("status") == "FOUND"),
+                None,
+            )
+            if highlighting_enabled and not found_verification:
+                citation_dict["resolve_status"] = "unresolved"
+                citation_dict["resolve_reason"] = "Evidence not found on cited page"
+                citation_dict.pop("bbox", None)
+                citation_dict.pop("page_size", None)
+                citation_dict.pop("anchor_snippet", None)
+                citation_dict.pop("text", None)
+            elif found_verification:
+                matched_locator = found_verification.get("matched_locator") or {}
+                if (
+                    selector_bundle
+                    and matched_locator.get("type") == "text_offsets"
+                    and isinstance(matched_locator.get("start"), int)
+                    and isinstance(matched_locator.get("end"), int)
+                ):
+                    updated_bundle = dict(selector_bundle)
+                    updated_bundle["text_position"] = {
+                        "start": matched_locator["start"],
+                        "end": matched_locator["end"],
+                    }
+                    citation_dict["selector_bundle"] = updated_bundle
+
             snapshot_id: Optional[str] = None
             if highlighting_enabled and graph_doc and selector_bundle:
                 try:
                     snapshot_uuid = uuid.uuid4()
+                    # DATA INTEGRITY:
+                    # Snapshot hash tuple (answer_hash/content_hash) is used for replayability and tamper detection.
                     snapshot = CitationSnapshot(
                         snapshot_id=snapshot_uuid,
                         request_id=request_id,
@@ -1505,6 +1627,8 @@ Return JSON only in the following format:
 
         if snapshot_count > 0:
             try:
+                # SIDE EFFECT:
+                # Snapshot persistence is best-effort and must not block answer delivery on commit failures.
                 self.db.commit()
             except Exception as e:
                 logger.warning(f"[QA] Failed to commit citation snapshots: {e}")
@@ -1656,6 +1780,8 @@ Return JSON only in the following format:
             Node.text_plain.ilike(f"%{kw}%") for kw in list(keywords)[:10]  # Limit to 10 keywords
         ]
         
+        # PERFORMANCE COUPLING:
+        # Keyword fallback is full-text scan-like; keep keyword cap and top_k bounds to protect tail latency.
         # Build query with ACL scoping
         query = self.db.query(Node).filter(
             Node.node_type == "chunk",
@@ -1738,6 +1864,8 @@ Return JSON only in the following format:
             candidates_json=candidates_json
         )
         
+        # FRAGILE COUPLING:
+        # Reranker relies on strict JSON output schema; prompt/field changes require coordinated parser updates.
         # Call OpenAI API directly with timeout
         headers = {
             "Authorization": f"Bearer {settings.openai_api_key}",
@@ -2141,6 +2269,8 @@ Return JSON only in the following format:
             logger.warning(f"[QA] No matching nodes found for targets: {detected_targets}")
             return merged_results, [], detected_targets
         
+        # ORDER DEPENDENCY:
+        # Injected seeds must be prepended to reserve top-K slots for explicit Figure/Table/Appendix requests.
         # 3. Merge injected nodes at the front of results
         # Injected nodes get priority slots (up to MAX_INJECTED_SEEDS)
         final_results = injected_nodes.copy()
@@ -2172,6 +2302,8 @@ Return JSON only in the following format:
         """
         expanded_nodes: List[ExpandedNode] = []
         edge_traces: List[EdgeTrace] = []
+        # WARNING:
+        # Edge traces here are inferred audit artifacts, not canonical persisted graph edges.
         
         def get_node_type_str(node) -> str:
             if hasattr(node.node_type, 'value'):
@@ -2424,6 +2556,7 @@ Return JSON only in the following format:
                             node_id=str(cite.get("node_id", "")),
                             page_no=cite.get("page_no"),
                             label=cite.get("label"),
+                            evidence_spans=list(cite.get("evidence_spans") or []),
                         )
                     )
 
@@ -2590,6 +2723,8 @@ Return JSON only in the following format:
             
             # 9. Graph expansion
             expanded = self.expander.expand(seed_node_ids)
+            # SECURITY ASSUMPTION:
+            # Sub-question evidence inherits ACL guarantees from expander; exporting pre-expansion seeds would require explicit ACL filtering.
             
             # 10. Conflict detection
             expanded_nodes_meta = self._collect_expanded_nodes_metadata(expanded)
@@ -2657,9 +2792,13 @@ Return JSON only in the following format:
         """Run standard pipeline as fallback, preserving audit from propagation safety attempt."""
         logger.info("[PropSafety] Running standard fallback...")
         
+        # INVARIANT:
+        # Explicit mode override prevents recursive fallback loops.
         # Run standard pipeline (mode="standard" to avoid recursion)
         standard_result = self.run(doc_id, question, top_k, version, mode="standard")
         
+        # ORDER DEPENDENCY:
+        # Preserve existing propagation audit before copying standard-mode fields.
         # Copy standard results but keep propagation safety audit
         audit = result.propagation_safety_audit
         

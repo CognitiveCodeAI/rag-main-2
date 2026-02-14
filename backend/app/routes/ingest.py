@@ -79,6 +79,7 @@ class ProcessPreviewRequest(BaseModel):
 
 
 PREVIEW_TTL_MINUTES = 30
+UPLOAD_READ_CHUNK_SIZE = 1024 * 1024
 METADATA_FIELDS = {
     "doc_date",
     "year",
@@ -169,6 +170,8 @@ def _parse_json_list(raw: Optional[str]) -> Optional[list]:
             return parsed
     except (json.JSONDecodeError, TypeError):
         pass
+    # SECURITY ASSUMPTION:
+    # Malformed ACL list payloads are treated as None; callers must not interpret None as stricter-than-requested access.
     return None
 
 
@@ -185,6 +188,40 @@ def _validate_pdf_if_needed(content: bytes, filename: str, content_type: Optiona
             status_code=400,
             detail="Invalid PDF file. Please upload a valid, non-corrupted PDF.",
         )
+
+
+def _upload_size_limit_bytes() -> int:
+    """Resolve configured upload size limit in bytes."""
+    settings = get_settings()
+    return settings.upload_max_file_size_mb * 1024 * 1024
+
+
+async def _read_upload_content(file: UploadFile) -> bytes:
+    """Read multipart upload with server-side max size enforcement."""
+    max_bytes = _upload_size_limit_bytes()
+    max_mb = max(1, max_bytes // (1024 * 1024))
+
+    declared_size = getattr(file, "size", None)
+    if isinstance(declared_size, int) and declared_size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size exceeds {max_mb}MB limit",
+        )
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File size exceeds {max_mb}MB limit",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _require_embedding_config() -> None:
@@ -253,6 +290,8 @@ def _cleanup_expired_previews(session) -> None:
         except Exception:
             # Best effort cleanup; row status still transitions to expired.
             pass
+        # SIDE EFFECT:
+        # Expiration status is authoritative even if blob deletion fails; object-store janitor paths must handle residual staged files.
         preview.status = "expired"
 
 
@@ -363,6 +402,8 @@ def _build_preview_warnings(metadata: dict[str, Any], confidence: dict[str, floa
 
 def _build_duplicate_response(session, checksum: str, tenant_id: Optional[str]) -> Optional[JSONResponse]:
     """Return duplicate conflict response if content already exists."""
+    # SECURITY ASSUMPTION:
+    # Duplicate identity is tenant-scoped; changing default tenant semantics can expose cross-tenant existence signals.
     effective_tenant = tenant_id if tenant_id else "default"
     existing = (
         session.query(ContentRegistry)
@@ -411,7 +452,7 @@ async def metadata_preview(
     tenant_id: Optional[str] = Form(None),
 ) -> MetadataPreviewResponse:
     """Upload and stage a file, then return extracted metadata for user review."""
-    content = await file.read()
+    content = await _read_upload_content(file)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
@@ -436,6 +477,8 @@ async def metadata_preview(
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=PREVIEW_TTL_MINUTES)
 
     storage = get_storage_client()
+    # SIDE EFFECT:
+    # Object is written before preview row commit; failed DB transactions can leave orphan preview blobs.
     storage.put_raw(
         doc_id=preview_doc_id,
         version_id=preview_version_id,
@@ -550,6 +593,8 @@ async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse
 
     final_doc_id = req.doc_id or generate_doc_id(content, preview_filename)
     final_version_id = generate_version_id()
+    # ORDER DEPENDENCY:
+    # Final raw blob must exist before task enqueue; worker consumes this exact (doc_id, version_id, filename) tuple.
     storage.put_raw(
         doc_id=final_doc_id,
         version_id=final_version_id,
@@ -563,6 +608,8 @@ async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse
         if not preview or preview.status != "ready":
             raise HTTPException(status_code=409, detail="Preview state changed. Re-upload to continue.")
 
+        # DATA INTEGRITY:
+        # This second duplicate check closes TOCTOU between preview read and final row creation; removing it enables duplicate canonical claims.
         # Repeat duplicate check to avoid race windows between preview read and final write.
         duplicate = _build_duplicate_response(
             session=session,
@@ -648,7 +695,7 @@ async def ingest_document(
         IngestResponse with job tracking info
     """
     # Read file content
-    content = await file.read()
+    content = await _read_upload_content(file)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
@@ -667,6 +714,8 @@ async def ingest_document(
     checksum = hashlib.sha256(content).hexdigest()
 
     # --- Duplicate detection: check if this content was already ingested ---
+    # SECURITY ASSUMPTION:
+    # Duplicate detection and downstream content registry must use the same tenant resolution to preserve isolation.
     # Scope by tenant_id to prevent cross-tenant false positives
     effective_tenant = tenant_id if tenant_id else "default"
     # _build_duplicate_response enforces tenant filter:
@@ -725,6 +774,8 @@ async def ingest_document(
     parsed_groups = _parse_json_list(allowed_groups)
     parsed_users = _parse_json_list(allowed_users)
 
+    # SIDE EFFECT:
+    # DB state is committed before broker publish; enqueue failures leave pending jobs requiring explicit recovery/retry tooling.
     # Queue Celery task
     ingest_document_task.delay(
         job_id=job_id,
@@ -812,6 +863,8 @@ async def list_document_versions(doc_id: str) -> list[dict]:
 
         # Backward-compatible fallback for older rows not yet mapped.
         if not graph_docs and legacy_doc and legacy_doc.source_uri:
+            # FRAGILE COUPLING:
+            # source_uri fallback is legacy compatibility only; non-unique URIs can misassociate versions across migrated records.
             graph_docs = (
                 session.query(DocumentGraph)
                 .filter(DocumentGraph.source_uri == legacy_doc.source_uri)

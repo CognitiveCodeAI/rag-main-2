@@ -111,7 +111,11 @@ export default function DashboardPage() {
   });
 
   // Fetch collections stats
-  const { data: collections, isLoading: collectionsLoading } = useQuery({
+  const {
+    data: collections,
+    isLoading: collectionsLoading,
+    isError: collectionsError,
+  } = useQuery({
     queryKey: ["collections"],
     queryFn: getCollections,
     refetchInterval: 60000,
@@ -126,12 +130,15 @@ export default function DashboardPage() {
 
   // Calculate total vectors
   const totalVectors = React.useMemo(() => {
-    if (!collections?.collections) return 0;
+    if (!collections?.collections) return null;
     return Object.values(collections.collections).reduce(
       (sum, col) => sum + (col.num_entities || 0),
       0
     );
   }, [collections]);
+  const collectionCount = collections?.collections
+    ? Object.keys(collections.collections).length
+    : null;
 
   const workerService = health?.services?.celery_worker;
   const apiStatus: "healthy" | "unhealthy" | "unknown" = healthLoading
@@ -174,15 +181,23 @@ export default function DashboardPage() {
         />
         <MetricCard
           title="Total Vectors"
-          value={formatNumber(totalVectors)}
-          description="Across all collections"
+          value={totalVectors === null ? "—" : formatNumber(totalVectors)}
+          description={
+            collectionsError
+              ? "Unavailable (vector stats request failed)"
+              : "Across all collections"
+          }
           icon={Database}
           loading={collectionsLoading}
         />
         <MetricCard
           title="Collections"
-          value={collections?.collections ? Object.keys(collections.collections).length : 0}
-          description="Active vector indices"
+          value={collectionCount ?? "—"}
+          description={
+            collectionsError
+              ? "Unavailable (vector stats request failed)"
+              : "Active vector indices"
+          }
           icon={FileText}
           loading={collectionsLoading}
         />
@@ -244,7 +259,15 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm">Vector Database</span>
                   <StatusIndicator
-                    status={collections ? "healthy" : "unknown"}
+                    status={
+                      collectionsLoading
+                        ? "unknown"
+                        : collectionsError
+                        ? "unhealthy"
+                        : collections
+                        ? "healthy"
+                        : "unknown"
+                    }
                   />
                 </div>
                 <div className="flex items-center justify-between">
@@ -273,6 +296,10 @@ export default function DashboardPage() {
                 <Skeleton className="h-6 w-full" />
                 <Skeleton className="h-6 w-full" />
               </div>
+            ) : collectionsError ? (
+              <p className="text-sm text-muted-foreground">
+                Unable to load vector collection statistics.
+              </p>
             ) : collections?.collections ? (
               Object.entries(collections.collections).map(([name, stats]) => (
                 <div key={name} className="flex items-center justify-between">

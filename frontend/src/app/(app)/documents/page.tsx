@@ -101,6 +101,18 @@ function DocumentsContent() {
   const [permissionsDocId, setPermissionsDocId] = React.useState<string | null>(null);
   const [deleteDoc, setDeleteDoc] = React.useState<DocumentGraph | null>(null);
 
+  React.useEffect(() => {
+    if (searchParams.get("upload") !== "true") return;
+    setUploadOpen(true);
+
+    // Consume the URL flag so users can close/reopen normally and repeated
+    // navigations to ?upload=true continue to work.
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("upload");
+    const next = params.toString();
+    router.replace(next ? `/documents?${next}` : "/documents");
+  }, [searchParams, router]);
+
   const handleReindex = async (doc: DocumentGraph) => {
     try {
       toast.info("Starting re-indexing...");

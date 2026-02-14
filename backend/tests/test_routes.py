@@ -85,6 +85,34 @@ class TestIngestValidation:
         )
         assert response.status_code == 415
         assert "unsupported" in response.json().get("detail", "").lower()
+
+    @patch("app.routes.ingest.get_settings")
+    def test_metadata_preview_rejects_oversized_file(self, mock_get_settings):
+        """Metadata preview should return 413 before processing oversized files."""
+        mock_get_settings.return_value = MagicMock(upload_max_file_size_mb=1)
+        too_large = b"x" * (1024 * 1024 + 1)
+
+        response = client.post(
+            "/v1/ingest/metadata-preview",
+            files={"file": ("too-large.txt", too_large, "text/plain")},
+        )
+
+        assert response.status_code == 413
+        assert "exceeds" in response.json().get("detail", "").lower()
+
+    @patch("app.routes.ingest.get_settings")
+    def test_ingest_rejects_oversized_file(self, mock_get_settings):
+        """Direct ingest should return 413 before worker/storage calls."""
+        mock_get_settings.return_value = MagicMock(upload_max_file_size_mb=1)
+        too_large = b"x" * (1024 * 1024 + 1)
+
+        response = client.post(
+            "/v1/ingest/document",
+            files={"file": ("too-large.txt", too_large, "text/plain")},
+        )
+
+        assert response.status_code == 413
+        assert "exceeds" in response.json().get("detail", "").lower()
     
     def test_invalid_job_id_format(self):
         """Invalid job ID format should return 400."""

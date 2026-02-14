@@ -11,9 +11,9 @@ import {
   Loader2,
   Search,
   Settings,
+  Info,
   HelpCircle,
   Code2,
-  ExternalLink,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -74,6 +74,11 @@ const secondaryNavItems = [
     icon: Settings,
   },
   {
+    title: "About",
+    url: "/about",
+    icon: Info,
+  },
+  {
     title: "Help",
     url: "/help",
     icon: HelpCircle,
@@ -97,7 +102,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <div className="relative flex aspect-square size-10 items-center justify-center shrink-0 bg-white rounded-full overflow-hidden">
                   <Image
                     src="/logo.png"
-                    alt="Cognitive Code™"
+                    alt="Cognitive Code"
                     fill
                     className="object-contain p-1.5"
                     sizes="40px"
@@ -105,7 +110,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </div>
                 <div className="flex items-baseline text-left">
                   <span className="font-semibold text-lg tracking-tight">Cognitive Code</span>
-                  <sup className="text-[10px] font-medium ml-0.5">™</sup>
                 </div>
               </Link>
             </SidebarMenuButton>
@@ -181,17 +185,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 Theme
               </span>
             </div>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <a
-              href="https://cognitivecode.ai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-primary transition-colors group-data-[collapsible=icon]:justify-center"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span className="group-data-[collapsible=icon]:hidden">cognitivecode.ai</span>
-            </a>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

@@ -5,6 +5,7 @@ import * as React from "react";
 import { Citation } from "@/lib/api";
 import { PDFViewer, CitationHighlight } from "@/components/pdf-viewer";
 import { HTMLSourceViewer } from "@/components/source-viewer/html-viewer";
+import { getEvidenceFailureMessage, getVerifiedEvidenceHighlights } from "@/components/source-viewer/evidence";
 
 interface SourceViewerProps {
   open: boolean;
@@ -34,17 +35,20 @@ export function SourceViewer({
 }: SourceViewerProps) {
   const pdfMode = isPdfCitation(citation);
 
-  const highlight: CitationHighlight | undefined = citation
-    ? {
-        page_no: citation.page_no || 1,
-        bbox: citation.bbox,
-        page_size: citation.page_size,
-        anchor_snippet: citation.anchor_snippet || citation.text,
-        text: citation.text,
-        selector_bundle: citation.selector_bundle,
-        label: citation.label,
-      }
-    : undefined;
+  const verifiedHighlights: CitationHighlight[] = React.useMemo(() => {
+    if (!citation) return [];
+    return getVerifiedEvidenceHighlights(citation).map((entry) => ({
+      page_no: entry.pageNo,
+      locator: entry.locator,
+      quote_text: entry.quoteText,
+      confidence: entry.confidence,
+      source_section: entry.sourceSection ?? undefined,
+    }));
+  }, [citation]);
+  const evidenceFailureMessage = React.useMemo(
+    () => getEvidenceFailureMessage(citation),
+    [citation],
+  );
 
   if (pdfMode) {
     return (
@@ -52,7 +56,8 @@ export function SourceViewer({
         url={url}
         open={open}
         onClose={onClose}
-        highlight={highlight}
+        highlights={verifiedHighlights}
+        evidenceFailureMessage={evidenceFailureMessage}
         title={title}
       />
     );

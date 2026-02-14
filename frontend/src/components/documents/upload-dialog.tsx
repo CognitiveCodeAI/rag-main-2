@@ -644,16 +644,7 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
           {/* Drop zone */}
           {stage === "idle" && !file && (
             <>
-              <input
-                id={fileInputId}
-                ref={fileInputRef}
-                type="file"
-                className="sr-only"
-                accept={acceptValue}
-                onChange={handleInputChange}
-              />
-              <label
-                htmlFor={fileInputId}
+              <div
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
@@ -664,7 +655,7 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
                 }}
                 aria-label="Choose a document to upload"
                 className={cn(
-                  "border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
+                  "relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
                   isDragging
                     ? "border-primary bg-primary/5"
                     : "border-muted-foreground/25 hover:border-primary/50"
@@ -673,6 +664,16 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
               >
+                {/* Native input captures clicks directly to avoid browser gesture issues. */}
+                <input
+                  id={fileInputId}
+                  ref={fileInputRef}
+                  type="file"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  accept={acceptValue}
+                  onChange={handleInputChange}
+                  aria-label="Choose a document to upload"
+                />
                 <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
                 <p className="text-sm font-medium">
                   Drop your file here or click to browse
@@ -680,7 +681,7 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
                 <p className="text-xs text-muted-foreground mt-1">
                   {typeHelpText} (max 50MB)
                 </p>
-              </label>
+              </div>
             </>
           )}
 

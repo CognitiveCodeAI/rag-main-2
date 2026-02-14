@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 CACHE_TTL_SECONDS = 60
 
 # In-memory cache
+# PERFORMANCE COUPLING:
+# Cache is process-local; multi-worker deployments require explicit invalidation strategy for cross-process consistency.
 _cached_settings: Optional["RuntimeSettings"] = None
 _cache_timestamp: float = 0
 
@@ -97,6 +99,8 @@ def get_runtime_settings(db: Session) -> RuntimeSettings:
     now = time.time()
 
     # Return cached if still fresh
+    # ORDER DEPENDENCY:
+    # Settings updates are eventually visible up to TTL unless invalidate_settings_cache() is called on the same process.
     if _cached_settings is not None and (now - _cache_timestamp) < CACHE_TTL_SECONDS:
         return _cached_settings
 
@@ -115,6 +119,8 @@ def get_runtime_settings(db: Session) -> RuntimeSettings:
         return _cached_settings
 
     except Exception as e:
+        # WARNING:
+        # DB read failures fail open to env defaults; this can silently revert runtime tuning during outages.
         logger.warning(f"Failed to load runtime settings from DB: {e}, using defaults")
         return RuntimeSettings.from_env_defaults()
 
@@ -139,6 +145,8 @@ def get_or_create_settings(db: Session) -> AppSettings:
     Returns:
         AppSettings model instance
     """
+    # INVARIANT:
+    # id=1 is the singleton row contract; changing key semantics requires coordinated migration and API updates.
     settings_row = db.query(AppSettings).filter(AppSettings.id == 1).first()
 
     if settings_row is None:
@@ -168,6 +176,8 @@ def update_settings(db: Session, updates: dict) -> AppSettings:
         if hasattr(settings_row, key):
             setattr(settings_row, key, value)
         else:
+            # DATA INTEGRITY:
+            # Unknown keys are ignored by design; callers must validate payloads to avoid false-success config writes.
             logger.warning(f"Unknown setting key: {key}")
 
     db.commit()

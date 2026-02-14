@@ -2,24 +2,31 @@ import type { Metadata } from "next";
 import { ThemeProvider } from "@/themes";
 import { QueryProvider } from "@/components/providers";
 import { Toaster } from "@/components/ui/sonner";
+import { APP_NAME, BRAND, BROWSER_TITLE } from "@/lib/brand";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Near Perfect RAG — by Cognitive Code™",
-  description: "AI-powered document intelligence with evidence-based citations. Built by Cognitive Code™ — Custom Software. AI at the Core.",
-  keywords: ["AI", "RAG", "retrieval augmented generation", "document intelligence", "citations", "Cognitive Code", "NPR"],
-  authors: [{ name: "Cognitive Code™", url: "https://cognitivecode.ai" }],
+  applicationName: APP_NAME,
+  title: {
+    default: BROWSER_TITLE,
+    template: `%s — ${BRAND.companyName}`,
+  },
+  description: "Evidence-first document intelligence with grounded citations.",
+  keywords: ["AI", "RAG", "retrieval augmented generation", "document intelligence", "citations", BRAND.companyName, "NPR"],
+  authors: [{ name: BRAND.companyName, url: BRAND.website }],
+  creator: BRAND.companyName,
+  publisher: BRAND.companyName,
   openGraph: {
-    title: "Near Perfect RAG — by Cognitive Code™",
-    description: "AI-powered document intelligence with evidence-based citations.",
-    url: "https://cognitivecode.ai",
-    siteName: "Cognitive Code™",
+    title: BROWSER_TITLE,
+    description: "Evidence-first document intelligence with grounded citations.",
+    url: BRAND.website,
+    siteName: BRAND.companyName,
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Near Perfect RAG — by Cognitive Code™",
-    description: "AI-powered document intelligence with evidence-based citations",
+    title: BROWSER_TITLE,
+    description: "Evidence-first document intelligence with grounded citations.",
   },
 };
 

@@ -34,6 +34,7 @@ class Citation:
     page_size: Optional[Dict[str, float]] = None  # {width, height} for normalization
     anchor_snippet: Optional[str] = None  # First ~150 chars for text search fallback
     raw_url: Optional[str] = None  # URL to fetch raw PDF
+    evidence_spans: List[Dict[str, Any]] = field(default_factory=list)  # Structured evidence contract (optional)
 
 
 @dataclass

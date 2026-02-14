@@ -38,6 +38,8 @@ class ACLEnforcer:
     def __init__(self, db: Session, entitlements: Optional[Entitlements]):
         self.db = db
         self.entitlements = entitlements
+        # FRAGILE COUPLING:
+        # These caches are request-scoped; reusing enforcers across requests can leak prior-user authorization state.
         self._accessible_doc_ids: Optional[set] = None
         self._doc_acl_cache: Dict[str, DocumentACL] = {}
         self._acl_log: List[Dict[str, Any]] = []
@@ -53,6 +55,8 @@ class ACLEnforcer:
         """
         if not self.acl_enabled:
             return None
+        # PERFORMANCE COUPLING:
+        # ACL doc-id set is cached for this request to avoid repeated policy SQL scans on each pipeline stage.
         if self._accessible_doc_ids is None:
             self._accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(
                 self.db, self.entitlements
@@ -71,6 +75,8 @@ class ACLEnforcer:
         if not self.acl_enabled:
             return None
 
+        # SECURITY ASSUMPTION:
+        # This expression is pre-filter only; all callers must still invoke Postgres/ACLEnforcer stage filters.
         parts = [f'tenant_id == "{self.entitlements.tenant_id}"']
         if not self.entitlements.is_admin:
             parts.append('visibility != "restricted"')
@@ -88,6 +94,8 @@ class ACLEnforcer:
         if accessible is None:
             return results
 
+        # DATA INTEGRITY:
+        # Search-result records must carry canonical graph doc_id in "doc_id"; mismatched IDs are treated as unauthorized.
         allowed = [r for r in results if r.get("doc_id") in accessible]
         denied = len(results) - len(allowed)
         if denied > 0:
@@ -150,6 +158,8 @@ class ACLEnforcer:
 
         # Get or cache the document ACL
         doc_acl = self._get_doc_acl(node.doc_id)
+        # WARNING:
+        # Missing parent document ACL currently fails open; node/doc referential integrity must be preserved upstream.
         if doc_acl is None:
             return False
 
@@ -157,6 +167,8 @@ class ACLEnforcer:
 
     def _get_doc_acl(self, doc_id: str) -> Optional[DocumentACL]:
         """Get DocumentACL for a doc_id, with caching."""
+        # ORDER DEPENDENCY:
+        # ACL snapshot is stable per request; policy changes mid-request are not reflected until next enforcer instance.
         if doc_id in self._doc_acl_cache:
             return self._doc_acl_cache[doc_id]
 

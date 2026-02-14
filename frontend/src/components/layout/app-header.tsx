@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { HealthIndicator } from "./health-indicator";
+import { APP_NAME } from "@/lib/brand";
 
 // Route name mapping
 const routeNames: Record<string, string> = {
@@ -27,6 +28,7 @@ const routeNames: Record<string, string> = {
   search: "Search",
   prompts: "Prompts",
   settings: "Settings",
+  about: "About",
   help: "Help",
   inspect: "Inspect",
 };
@@ -81,14 +83,14 @@ export function AppHeader({ onCommandOpen }: AppHeaderProps) {
         </BreadcrumbList>
       </Breadcrumb>
 
-      {/* Demo disclaimer */}
-      <span className="hidden lg:inline-flex text-xs text-muted-foreground/70 italic ml-3">
-        Demo UI — For RAG testing & demonstration only
+      {/* Test environment marker */}
+      <span className="hidden lg:inline-flex ml-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-300">
+        Test UI Only: This UI is for pipeline testing. Create any UX/UI you need.
       </span>
 
       {/* Mobile title */}
       <span className="font-medium md:hidden">
-        {breadcrumbItems[breadcrumbItems.length - 1]?.label || "NPR"}
+        {breadcrumbItems[breadcrumbItems.length - 1]?.label || APP_NAME}
       </span>
 
       {/* Spacer */}

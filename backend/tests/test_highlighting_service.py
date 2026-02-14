@@ -7,6 +7,7 @@ from app.services.highlighting import (
     normalize_text,
     resolve_citation_selector,
     resolve_selector_bundle,
+    verify_evidence_span,
 )
 
 
@@ -121,3 +122,48 @@ def test_resolve_citation_selector_fails_on_stale_content_hash():
     assert result["resolve_status"] == "unresolved"
     assert result["reason"] == "stale_content_hash"
 
+
+def test_verify_evidence_span_found_on_cited_page():
+    source_map = {
+        "canonical_text": "Intro page one text.\n\nInitial Franchise Fee is due at signing.\n\nPage two unrelated text.",
+        "nodes": [
+            {"node_id": "n1", "start": 0, "end": 20, "page_no": 1},
+            {"node_id": "n2", "start": 22, "end": 63, "page_no": 1},
+            {"node_id": "n3", "start": 65, "end": 88, "page_no": 2},
+        ],
+    }
+
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        page_index=1,
+        quote_text="Initial Franchise Fee is due at signing.",
+        locator=None,
+        source_map=source_map,
+        allow_fuzzy=False,
+    )
+    assert result["status"] == "FOUND"
+    assert result["matched_locator"]["type"] == "text_offsets"
+    assert result["confidence"] == 1.0
+
+
+def test_verify_evidence_span_not_found_on_cited_page():
+    source_map = {
+        "canonical_text": "Intro page one text.\n\nInitial Franchise Fee is due at signing.\n\nPage two unrelated text.",
+        "nodes": [
+            {"node_id": "n1", "start": 0, "end": 20, "page_no": 1},
+            {"node_id": "n2", "start": 22, "end": 63, "page_no": 1},
+            {"node_id": "n3", "start": 65, "end": 88, "page_no": 2},
+        ],
+    }
+
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        page_index=1,
+        quote_text="Page two unrelated text.",
+        locator=None,
+        source_map=source_map,
+        allow_fuzzy=False,
+    )
+    assert result["status"] == "NOT_FOUND"
+    assert result["matched_locator"] is None
+    assert result["reason"] == "evidence_not_found_on_cited_page"

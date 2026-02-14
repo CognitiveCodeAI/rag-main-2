@@ -2,6 +2,8 @@
 
 A production-grade Retrieval-Augmented Generation (RAG) system designed for high-accuracy document question answering with evidence-based citations.
 
+Developed by Larry Stewart at Cognitive Code ([cognitiveCode.ai](https://cognitiveCode.ai)).
+
 ## Overview
 
 NPR (Near-Perfect RAG) is a full-stack RAG system that retrieves relevant document evidence and generates answers with explicit citations. The system prioritizes:
@@ -53,93 +55,77 @@ NPR (Near-Perfect RAG) is a full-stack RAG system that retrieves relevant docume
 
 ## Quick Start
 
-> **First time?** See [SETUP.md](SETUP.md) for comprehensive setup instructions with troubleshooting.
-
-### Prerequisites
-
-- Python 3.11+ (`python --version`)
-- Node.js 18+ (`node --version`)
-- Docker & Docker Compose (`docker --version`)
-- OpenAI API key ([get one here](https://platform.openai.com/api-keys))
-
-### 1. Clone and Start Infrastructure
-
 ```bash
 git clone <repository-url> rag-system
 cd rag-system
-
-# Option A (recommended when you already have ai-* containers running):
-# Reuse existing Docker services and skip starting duplicate infrastructure.
-# Ensure postgres/redis/minio/milvus are already up on localhost ports.
-
-# Option B (fresh local stack):
-docker compose up -d
-docker compose ps
+./dev init
+./dev up
 ```
 
-Option B starts PostgreSQL, Milvus, MinIO, and Redis for this repo.
-If ports `5432`, `6379`, `9000`, or `19530` are already in use, either reuse your
-existing stack and point `backend/.env` to it, or remap ports in `docker-compose.yml`.
+`./dev init` validates prerequisites (Docker, Python 3.10+, Node 18+, npm) and creates/syncs `backend/.env` from `backend/.env.example` without overwriting existing values.
 
-### 2. Configure Backend
+`./dev up` runs first-time bootstrap when needed, starts local infrastructure, then starts backend, frontend, and celery.
+
+Open:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API docs: http://localhost:8000/docs
+
+Useful commands:
+- `./dev status`
+- `./dev logs app` or `./dev logs infra`
+- `./dev monitor` (foreground) or `./dev monitor --daemon` (background)
+- `./dev doctor`
+- `./dev migrate`
+- `./dev seed`
+- `./dev test`
+- `./dev reset --yes` (or `./dev reset --volumes --yes` to wipe service data)
+- `./dev down`
+
+> Need deep setup/troubleshooting details? See [SETUP.md](SETUP.md).
+
+### Troubleshooting
+
+- If `./dev up` fails: run `./dev doctor`, then `./dev logs infra`.
+- If API/UI is unreachable: run `./dev status`, then `./dev logs app`.
+- If migrations fail: run `./dev migrate` and review backend output.
+- If startup state is corrupted: run `./dev reset --yes` (or `./dev reset --volumes --yes` to wipe data), then `./dev init` and `./dev up`.
+
+### Optional Active Monitor
+
+The active monitor is opt-in and safe-by-default:
+- Off by default (`MONITOR_ENABLED=false`)
+- Observe-only unless `MONITOR_MODE=heal`
+- Supports dry-run (`MONITOR_DRY_RUN=true`) and circuit breaker safeguards
+
+Run it via `./dev`:
 
 ```bash
-cd backend
+# Foreground monitor (Ctrl+C to stop)
+MONITOR_ENABLED=true MONITOR_MODE=observe ./dev monitor
 
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # Linux/macOS
+# Background daemon monitor
+MONITOR_ENABLED=true MONITOR_MODE=heal ./dev monitor --daemon
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy and configure environment
-copy .env.example .env       # Windows
-# cp .env.example .env       # Linux/macOS
+# Inspect monitor status/logs
+./dev monitor --status
+./dev monitor --stop
+./dev logs monitor
+./dev status
 ```
 
-**Important**: Edit `.env` and set your OpenAI API key:
-```
-OPENAI_API_KEY=sk-your-actual-key-here
-```
+Monitor environment variables:
+- `MONITOR_ENABLED` = `true|false`
+- `MONITOR_MODE` = `observe|heal`
+- `MONITOR_DRY_RUN` = `true|false`
+- `MONITOR_INTERVAL_SECONDS`
+- `MONITOR_MAX_RETRIES`
+- `MONITOR_BACKOFF_SECONDS`
+- `MONITOR_CIRCUIT_BREAKER_THRESHOLD`
 
-If you are reusing existing Docker services, set connection fields in `.env`
-(`DB_*`, `MILVUS_*`, `MINIO_*`, `REDIS_*`) to match those running containers.
-
-### 3. Initialize Database
-
-```bash
-# Run setup script (from backend directory)
-python -m scripts.setup.setup_all
-```
-
-### 4. Start Backend
-
-```bash
-# Start API server
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Verify it's running: http://localhost:8000/health
-
-### 5. Start Frontend (Optional)
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Access UI at: http://localhost:3000
-
-### 6. Start Celery Worker (Required for ingestion/embedding jobs)
-
-```bash
-# In a new terminal, with venv activated
-cd backend
-celery -A app.worker worker --loglevel=info
-```
+Monitor outputs:
+- Structured incident log: `logs/monitor.jsonl`
+- State/dedupe file: `.monitor_state.json`
 
 ## API Endpoints
 

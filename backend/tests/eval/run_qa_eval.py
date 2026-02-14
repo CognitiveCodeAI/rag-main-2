@@ -349,6 +349,8 @@ def check_evidence_grounded(
     
     # Get the cited context text
     cited_text = qa_result.packed_context.lower() if qa_result.packed_context else ""
+    cited_text_compact = re.sub(r"[^a-z0-9]+", "", cited_text)
+    cited_numeric_tokens = set(re.findall(r"\d+(?:\.\d+)?", cited_text.replace(",", "")))
     
     if not cited_text:
         result.reason = "No cited context available"
@@ -364,8 +366,20 @@ def check_evidence_grounded(
     
     grounded_values = []
     for value in values_to_check:
-        value_str = str(value).lower()
+        value_str = str(value).strip().lower()
+        if not value_str:
+            continue
+
+        compact_value = re.sub(r"[^a-z0-9]+", "", value_str)
+        numeric_tokens = re.findall(r"\d+(?:\.\d+)?", value_str.replace(",", ""))
+
         if value_str in cited_text:
+            grounded_values.append(value)
+            continue
+        if compact_value and len(compact_value) >= 4 and compact_value in cited_text_compact:
+            grounded_values.append(value)
+            continue
+        if numeric_tokens and all(token in cited_numeric_tokens for token in numeric_tokens):
             grounded_values.append(value)
     
     # Check expected_keywords in cited text  
@@ -467,12 +481,24 @@ def _is_abstain(answer: str) -> bool:
     if not answer:
         return True
     text = answer.lower()
-    return (
-        "cannot find sufficient information" in text
-        or "insufficient information" in text
-        or "cannot find enough information" in text
-        or "i cannot find" in text
+    abstain_phrases = (
+        "cannot find sufficient information",
+        "insufficient information",
+        "cannot find enough information",
+        "not enough information",
+        "i cannot find",
+        "unable to find",
+        "cannot determine from the document",
+        "unable to determine from the document",
+        "not specified in the document",
+        "not provided in the document",
+        "not addressed in the document",
+        "does not specify",
+        "does not mention",
+        "does not describe",
+        "not mentioned in the document",
     )
+    return any(phrase in text for phrase in abstain_phrases)
 
 
 def _has_abstain_phrase(answer: str) -> bool:
@@ -484,6 +510,11 @@ def _has_abstain_phrase(answer: str) -> bool:
         "cannot find" in text
         or "insufficient information" in text
         or "not enough information" in text
+        or "does not specify" in text
+        or "does not mention" in text
+        or "does not describe" in text
+        or "not provided in the document" in text
+        or "not addressed in the document" in text
     )
 
 

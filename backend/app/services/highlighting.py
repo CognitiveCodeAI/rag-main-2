@@ -15,6 +15,7 @@ import logging
 import mimetypes
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional, Tuple
 
@@ -196,6 +197,7 @@ def build_selector_artifacts_for_nodes(
         "    <h1 style=\"margin:0 0 12px 0;font-size:18px;\">Canonical Source View</h1>\n"
         f"    <p style=\"margin:0 0 16px 0;color:#4b5563;font-size:12px;\">Generated {html.escape(now_iso)}</p>\n"
         f"    <pre id=\"canonical-text\">{html.escape(canonical_text)}</pre>\n"
+        "    <p style=\"margin:20px 0 0 0;color:#6b7280;font-size:11px;opacity:0.75;\">© Cognitive Code — cognitiveCode.ai</p>\n"
         "  </main>\n"
         "</body>\n"
         "</html>\n"
@@ -455,3 +457,191 @@ def resolve_citation_selector(
         "resolved_position": resolved_position,
         "reason": reason,
     }
+
+
+def _find_page_range(source_map: dict, page_index: int) -> Optional[Tuple[int, int]]:
+    nodes = source_map.get("nodes") or []
+    starts: list[int] = []
+    ends: list[int] = []
+    for node in nodes:
+        if node.get("page_no") != page_index:
+            continue
+        start = node.get("start")
+        end = node.get("end")
+        if not isinstance(start, int) or not isinstance(end, int) or end <= start:
+            continue
+        starts.append(start)
+        ends.append(end)
+    if not starts or not ends:
+        return None
+    return min(starts), max(ends)
+
+
+def _match_with_tight_fuzzy(page_text: str, quote_text: str, threshold: float) -> Optional[Tuple[int, int, float]]:
+    """Return local page offsets for a high-threshold fuzzy match."""
+    quote_norm = normalize_text(quote_text).casefold()
+    if not quote_norm:
+        return None
+
+    quote_len = max(1, len(quote_text))
+    page_len = len(page_text)
+    if page_len == 0:
+        return None
+
+    # Deterministic candidate windows around occurrences of the quote's first token.
+    first_token = quote_norm.split(" ")[0]
+    haystack = normalize_text(page_text).casefold()
+    anchor_positions: list[int] = []
+    search_from = 0
+    while True:
+        idx = haystack.find(first_token, search_from)
+        if idx < 0:
+            break
+        anchor_positions.append(idx)
+        search_from = idx + max(1, len(first_token))
+        if len(anchor_positions) >= 32:
+            break
+
+    if not anchor_positions:
+        return None
+
+    best: Optional[Tuple[int, int, float]] = None
+    # Work on raw page text for stable offset output.
+    for pos in anchor_positions:
+        start = max(0, pos - 24)
+        end = min(page_len, start + quote_len + 48)
+        candidate = page_text[start:end]
+        ratio = SequenceMatcher(
+            None,
+            normalize_text(candidate).casefold(),
+            quote_norm,
+        ).ratio()
+        if ratio >= threshold and (best is None or ratio > best[2]):
+            best = (start, end, ratio)
+
+    return best
+
+
+def verify_evidence_span(
+    *,
+    doc_id: str,
+    page_index: int,
+    quote_text: str,
+    locator: Optional[dict],
+    source_map: dict,
+    allow_fuzzy: bool = False,
+    fuzzy_threshold: float = 0.97,
+) -> dict:
+    """Verify evidence against the cited page only.
+
+    Returns:
+        {
+          "status": "FOUND" | "NOT_FOUND",
+          "matched_locator": Optional[dict],
+          "confidence": float,
+          "reason": str,
+        }
+    """
+    canonical_text = source_map.get("canonical_text") or ""
+    if not canonical_text:
+        return {
+            "status": "NOT_FOUND",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": "missing_canonical_text",
+        }
+
+    quote = (quote_text or "").strip()
+    if not quote:
+        return {
+            "status": "NOT_FOUND",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": "empty_quote_text",
+        }
+
+    page_range = _find_page_range(source_map, page_index)
+    if not page_range:
+        return {
+            "status": "NOT_FOUND",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": "page_not_indexed",
+        }
+    page_start, page_end = page_range
+    page_text = canonical_text[page_start:page_end]
+
+    def found(matched_locator: dict, confidence: float, reason: str) -> dict:
+        return {
+            "status": "FOUND",
+            "matched_locator": matched_locator,
+            "confidence": confidence,
+            "reason": reason,
+            "doc_id": doc_id,
+            "page_index": page_index,
+        }
+
+    def not_found(reason: str) -> dict:
+        return {
+            "status": "NOT_FOUND",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": reason,
+            "doc_id": doc_id,
+            "page_index": page_index,
+        }
+
+    # 1) Prefer exact locator validation when text offsets are provided.
+    if locator and locator.get("type") == "text_offsets":
+        start = locator.get("start")
+        end = locator.get("end")
+        if (
+            isinstance(start, int)
+            and isinstance(end, int)
+            and 0 <= start < end <= len(canonical_text)
+            and page_start <= start < end <= page_end
+        ):
+            extracted = canonical_text[start:end]
+            if normalize_text(extracted).casefold() == normalize_text(quote).casefold():
+                return found(
+                    {"type": "text_offsets", "start": start, "end": end},
+                    1.0,
+                    "exact_text_offsets_match",
+                )
+        else:
+            return not_found("locator_outside_cited_page")
+
+    # 2) Exact quote search on cited page.
+    quote_idx = page_text.find(quote)
+    if quote_idx >= 0:
+        start = page_start + quote_idx
+        end = start + len(quote)
+        return found(
+            {"type": "text_offsets", "start": start, "end": end},
+            1.0,
+            "exact_quote_match_on_page",
+        )
+
+    # 3) Whitespace-normalized exact check, still constrained to cited page.
+    ws_pattern = r"\s+".join(re.escape(part) for part in quote.split())
+    if ws_pattern:
+        ws_match = re.search(ws_pattern, page_text)
+        if ws_match:
+            return found(
+                {"type": "text_offsets", "start": page_start + ws_match.start(), "end": page_start + ws_match.end()},
+                0.99,
+                "exact_quote_match_on_page_whitespace_normalized",
+            )
+
+    # 4) Optional high-threshold fuzzy fallback.
+    if allow_fuzzy:
+        fuzzy = _match_with_tight_fuzzy(page_text, quote, threshold=fuzzy_threshold)
+        if fuzzy:
+            local_start, local_end, score = fuzzy
+            return found(
+                {"type": "text_offsets", "start": page_start + local_start, "end": page_start + local_end},
+                float(score),
+                "fuzzy_quote_match_on_page",
+            )
+
+    return not_found("evidence_not_found_on_cited_page")

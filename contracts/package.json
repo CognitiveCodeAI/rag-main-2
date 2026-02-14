@@ -2,6 +2,8 @@
   "name": "@npr/contracts",
   "version": "1.0.0",
   "description": "NPR JSON Schemas for validation and dev tooling",
+  "author": "Larry Stewart",
+  "homepage": "https://cognitiveCode.ai",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {

@@ -28,6 +28,8 @@ class ACLPostgresFilter:
         if entitlements is None:
             return query
 
+        # SECURITY ASSUMPTION:
+        # Tenant predicate is mandatory and must remain outside visibility OR branches to prevent cross-tenant widening.
         # Always scope by tenant_id
         query = query.filter(DocumentGraph.tenant_id == entitlements.tenant_id)
 
@@ -35,6 +37,8 @@ class ACLPostgresFilter:
         if entitlements.is_admin:
             return query
 
+        # INVARIANT:
+        # Non-admin authorization is additive (OR over allowed visibility paths); changing OR/AND structure can silently deny or leak docs.
         # Build visibility-based OR conditions
         visibility_conditions = [
             DocumentGraph.visibility == "public",
@@ -75,6 +79,8 @@ class ACLPostgresFilter:
             )
 
         # Restricted: user must be in allowed_users
+        # DATA INTEGRITY:
+        # Keep restricted membership check explicit; NULL/empty allowed_users must never imply access.
         visibility_conditions.append(
             and_(
                 DocumentGraph.visibility == "restricted",
@@ -85,6 +91,8 @@ class ACLPostgresFilter:
         )
 
         # Documents with NULL visibility (pre-ACL data) are treated as public
+        # FRAGILE COUPLING:
+        # This legacy null-visibility compatibility path is relied on by pre-migration records; tightening requires coordinated backfill.
         visibility_conditions.append(DocumentGraph.visibility.is_(None))
 
         query = query.filter(or_(*visibility_conditions))

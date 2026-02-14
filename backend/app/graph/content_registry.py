@@ -59,6 +59,8 @@ class ContentRegistryManager:
         Returns:
             ContentIdentity with canonical_doc_id and duplicate status
         """
+        # SECURITY ASSUMPTION:
+        # Tenant defaulting must stay consistent with ingest duplicate checks; drift causes cross-tenant dedupe behavior changes.
         # Normalize tenant_id to 'default' when None for consistent lookups
         effective_tenant = tenant_id if tenant_id else 'default'
 
@@ -98,6 +100,8 @@ class ContentRegistryManager:
         )
         
         result = self.db.execute(stmt).fetchone()
+        # ORDER DEPENDENCY:
+        # Registry write participates in caller transaction; committing here would break ingest atomicity.
         self.db.flush()
         
         canonical_doc_id = result[0]
@@ -106,6 +110,8 @@ class ContentRegistryManager:
         # Determine if this is a duplicate based on whether:
         # 1. Entry existed before our upsert, OR
         # 2. The canonical_doc_id differs from our doc_id (we lost the race)
+        # DATA INTEGRITY:
+        # Keep both conditions; relying on one can misclassify races and create duplicate canonical ingests.
         is_duplicate = was_existing or (canonical_doc_id != doc_id)
         
         if is_duplicate:
@@ -159,6 +165,8 @@ class ContentRegistryManager:
         """
         from app.db.graph_models import DocumentGraph
         
+        # FRAGILE COUPLING:
+        # This lookup assumes canonical_doc_id is globally unique across tenants; add tenant scope if that invariant changes.
         docs = self.db.query(DocumentGraph.doc_id).filter(
             DocumentGraph.canonical_doc_id == canonical_doc_id
         ).all()

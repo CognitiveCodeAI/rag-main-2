@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SourceMapResponse, Citation } from "@/lib/api";
+import { buildCanonicalHighlightRanges, getEvidenceFailureMessage } from "@/components/source-viewer/evidence";
 
 interface HTMLSourceViewerProps {
   open: boolean;
@@ -69,30 +70,41 @@ export function HTMLSourceViewer({
 
   const renderHighlightedText = React.useMemo(() => {
     const canonicalText = sourceMap?.canonical_text || "";
-    const position = citation?.selector_bundle?.text_position;
-    const status = citation?.resolve_status || "unresolved";
+    const ranges = buildCanonicalHighlightRanges(citation, canonicalText.length);
 
     if (!canonicalText) {
       return null;
     }
 
-    if (!position || status === "unresolved") {
+    if (!ranges.length) {
       return <span>{canonicalText}</span>;
     }
 
-    const start = Math.max(0, Math.min(position.start, canonicalText.length));
-    const end = Math.max(start, Math.min(position.end, canonicalText.length));
+    const fragments: React.ReactNode[] = [];
+    let cursor = 0;
+    ranges.forEach((range, index) => {
+      if (cursor < range.start) {
+        fragments.push(
+          <span key={`text-${index}`}>{canonicalText.slice(cursor, range.start)}</span>,
+        );
+      }
+      fragments.push(
+        <mark key={`mark-${index}`} data-highlight="active">
+          {canonicalText.slice(range.start, range.end)}
+        </mark>,
+      );
+      cursor = range.end;
+    });
+    if (cursor < canonicalText.length) {
+      fragments.push(<span key="text-tail">{canonicalText.slice(cursor)}</span>);
+    }
 
-    return (
-      <>
-        {canonicalText.slice(0, start)}
-        <mark data-highlight="active">{canonicalText.slice(start, end)}</mark>
-        {canonicalText.slice(end)}
-      </>
-    );
-  }, [sourceMap?.canonical_text, citation?.selector_bundle?.text_position, citation?.resolve_status]);
+    return <>{fragments}</>;
+  }, [sourceMap?.canonical_text, citation]);
 
   const resolveStatus = citation?.resolve_status || "unresolved";
+  const evidenceFailureMessage = getEvidenceFailureMessage(citation);
+  const showEvidenceNotFound = Boolean(evidenceFailureMessage);
 
   return (
     <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
@@ -123,9 +135,9 @@ export function HTMLSourceViewer({
           )}
         </div>
 
-        {resolveStatus === "unresolved" && (
+        {showEvidenceNotFound && (
           <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-            Cannot verify exact passage for this citation.
+            {evidenceFailureMessage}
             {citation?.resolve_reason ? ` (${citation.resolve_reason})` : ""}
           </div>
         )}
@@ -143,4 +155,3 @@ export function HTMLSourceViewer({
 }
 
 export default HTMLSourceViewer;
-

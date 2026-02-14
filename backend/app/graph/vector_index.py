@@ -30,6 +30,8 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Version configuration - switch between v1 and v2 collections
+# INVARIANT:
+# Active version must stay aligned with embed/write path and startup schema checks; mismatches create silent zero-recall searches.
 ACTIVE_COLLECTION_VERSION = "v2"  # "v1" or "v2"
 
 # V1 Collection names (legacy, no metadata fields)
@@ -138,6 +140,8 @@ class GraphVectorIndex:
         elif collection_version == "v2":
             self.node_type_collections = NODE_TYPE_COLLECTIONS_V2
         else:
+            # WARNING:
+            # Unknown version strings currently degrade to v1 mapping; callers must validate version inputs upstream.
             self.node_type_collections = NODE_TYPE_COLLECTIONS_V1
         
         self._connected = False
@@ -328,6 +332,8 @@ class GraphVectorIndex:
             ])
         
         # Insert without explicit flush (Milvus server has flush issues)
+        # ORDER DEPENDENCY:
+        # Read-after-write freshness depends on eventual consistency search mode below; forcing strict consistency will miss fresh inserts.
         result = collection.insert(data)
         logger.info(f"Inserted {len(records)} vectors into {collection_name} (auto-flush pending)")
         
@@ -418,6 +424,8 @@ class GraphVectorIndex:
             limit=top_k,
             expr=expr,
             output_fields=output_fields,
+            # PERFORMANCE COUPLING:
+            # "Eventually" is required to surface non-flushed inserts; tightening this changes freshness/latency semantics.
             consistency_level="Eventually"  # Find unflushed data
         )
         
@@ -489,6 +497,8 @@ class GraphVectorIndex:
             return results
 
         # Fallback to alternate version
+        # FRAGILE COUPLING:
+        # Fallback matrix is asymmetric (v2/v3 -> v1, v1 -> v2) to preserve legacy recall; changing it affects mixed-index migrations.
         fallback_version = "v1" if self.collection_version in ("v2", "v3") else "v2"
         logger.info(
             f"[VectorIndex] No results in {self.collection_version}, "
@@ -499,6 +509,8 @@ class GraphVectorIndex:
             fallback_index = GraphVectorIndex(collection_version=fallback_version)
             # Note: filter_expr may not work on v1 collections (no metadata fields)
             fallback_filter = None if fallback_version == "v1" else filter_expr
+            # SECURITY ASSUMPTION:
+            # Fallback search omits Milvus ACL pre-filter; ACLEnforcer/Postgres remains the mandatory gate.
             results = fallback_index.search(
                 node_type, query_vector, top_k, doc_id_filter, fallback_filter
             )
@@ -545,6 +557,8 @@ class GraphVectorIndex:
                 )
                 all_results.extend(results)
             except Exception as e:
+                # SIDE EFFECT:
+                # Per-type failures are swallowed to preserve partial recall; callers must treat results as best-effort.
                 logger.warning(f"Search failed for {node_type}: {e}")
         
         # Sort by score (higher is better for COSINE)
@@ -644,6 +658,8 @@ class GraphVectorIndex:
             RuntimeError: If v2 collections are missing or misconfigured
         """
         if self.collection_version != "v2":
+            # FRAGILE COUPLING:
+            # Only v2 is schema-verified here; enabling v3 in production requires separate startup validation coverage.
             return {
                 "status": "skipped",
                 "reason": f"Not v2 collections (version={self.collection_version})"
