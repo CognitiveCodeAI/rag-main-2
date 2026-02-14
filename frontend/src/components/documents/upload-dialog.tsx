@@ -112,6 +112,9 @@ const EMBED_STAGE_LABELS: Record<string, string> = {
   complete: "Embedding complete",
 };
 
+const INGEST_POLL_INTERVAL_MS = 2000;
+const INGEST_MAX_ATTEMPTS = 600; // 20 minutes
+
 function formatElapsed(ms: number): string {
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
@@ -493,8 +496,8 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
       let ingestResult: IngestJob;
       try {
         ingestResult = await pollIngestJob(ingestResponse.job_id, {
-          interval: 2000,
-          maxAttempts: 150,
+          interval: INGEST_POLL_INTERVAL_MS,
+          maxAttempts: INGEST_MAX_ATTEMPTS,
           onProgress: (job: IngestJob) => {
             if (job.pipeline_stage && INGEST_STAGE_LABELS[job.pipeline_stage]) {
               setStatusMessage(INGEST_STAGE_LABELS[job.pipeline_stage]);
@@ -505,7 +508,7 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
             }
 
             if (job.status === "processing") {
-              setProgress((prev) => Math.min(48, prev + 3));
+              setProgress((prev) => Math.min(70, prev + 1));
             } else if (job.status === "pending") {
               setProgress((prev) => Math.min(20, prev + 1));
             }
@@ -514,7 +517,12 @@ export function UploadDialog({ open, onOpenChange, supportedTypes: supportedType
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.includes("timeout")) {
-          throw new Error("Ingestion timed out after 5 minutes. Check the Processing page for job status.");
+          const ingestTimeoutMinutes = Math.round(
+            (INGEST_POLL_INTERVAL_MS * INGEST_MAX_ATTEMPTS) / 60000
+          );
+          throw new Error(
+            `Ingestion timed out after ${ingestTimeoutMinutes} minutes. Check the Processing page for job status.`
+          );
         }
         throw new Error(`Ingestion failed: ${msg}`);
       }
