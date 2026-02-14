@@ -2,6 +2,7 @@
 
 import os
 import urllib3
+import pytest
 from dotenv import load_dotenv
 from opensearchpy import OpenSearch
 
@@ -34,15 +35,23 @@ def get_opensearch_client() -> OpenSearch:
     return client
 
 
+def _require_opensearch() -> OpenSearch:
+    """Return a verified OpenSearch client or skip if cluster unavailable."""
+    client = get_opensearch_client()
+    try:
+        client.info()
+        return client
+    except Exception as e:
+        pytest.skip(f"OpenSearch unavailable at {os.getenv('OPENSEARCH_URL', 'https://localhost:9200')}: {e}")
+
+
 def test_connection():
     """Test basic connection to OpenSearch."""
     print("Testing OpenSearch connection...")
     print(f"  URL: {os.getenv('OPENSEARCH_URL')}")
     print(f"  User: {os.getenv('OPENSEARCH_USERNAME')}")
     
-    client = get_opensearch_client()
-    
-    # Test cluster info
+    client = _require_opensearch()
     info = client.info()
     print(f"\n✓ Connected to OpenSearch!")
     print(f"  Cluster name: {info['cluster_name']}")
@@ -54,7 +63,7 @@ def test_connection():
 
 def test_cluster_health():
     """Test cluster health."""
-    client = get_opensearch_client()
+    client = _require_opensearch()
     health = client.cluster.health()
     
     print(f"\nCluster Health:")
@@ -68,7 +77,7 @@ def test_cluster_health():
 
 def test_list_indices():
     """List all indices."""
-    client = get_opensearch_client()
+    client = _require_opensearch()
     indices = client.cat.indices(format="json")
     
     print(f"\nIndices ({len(indices)}):")
@@ -82,7 +91,7 @@ def test_list_indices():
 
 def test_create_test_index():
     """Create a test index to verify write access."""
-    client = get_opensearch_client()
+    client = _require_opensearch()
     test_index = "npr-test-connection"
     
     # Delete if exists

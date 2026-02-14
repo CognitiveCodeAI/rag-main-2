@@ -1,12 +1,14 @@
 """Celery worker configuration for NPR RAG."""
 
-import os
-
 from celery import Celery
 
-# Redis connection (defaults match docker-compose.yml for local development)
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-REDIS_BACKEND = os.getenv("REDIS_BACKEND", "redis://localhost:6379/1")
+from app.config import get_settings
+
+settings = get_settings()
+
+# Keep Celery broker/backend aligned with backend settings (.env-aware).
+REDIS_URL = settings.redis_url
+REDIS_BACKEND = settings.redis_backend
 
 # Create Celery app
 celery_app = Celery(
@@ -29,4 +31,8 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    # Be explicit about broker retry behavior during startup and transient outages.
+    broker_connection_retry=True,
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=None,
 )

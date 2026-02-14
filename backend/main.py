@@ -4,9 +4,11 @@ FastAPI service for query orchestration, tool routing, policy checks, and stream
 Phase 1: Document ingestion pipeline now active.
 """
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
@@ -167,6 +169,36 @@ async def health(check_services: bool = Query(default=False, description="Check 
             "supported_file_types": sorted(get_supported_types()),
             "cross_format_highlighting_enabled": settings.enable_cross_format_highlighting,
         },
+    )
+
+
+@app.get("/health/live", tags=["health"])
+async def health_live():
+    """Liveness endpoint: process is running and can serve requests."""
+    return {
+        "status": "healthy",
+        "version": settings.app_version,
+        "timestamp": datetime.utcnow(),
+    }
+
+
+@app.get("/health/ready", response_model=HealthResponse, tags=["health"])
+async def health_ready():
+    """Readiness endpoint: dependencies reachable and worker checks applied."""
+    return await health(check_services=True)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all handler for unexpected errors with stable client detail."""
+    error_id = str(uuid.uuid4())
+    logger.error(
+        f"[Unhandled] error_id={error_id} path={request.url.path}: {exc}",
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error (error_id={error_id})"},
     )
 
 

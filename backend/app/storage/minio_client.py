@@ -370,6 +370,10 @@ class StorageClient:
             return True
         except S3Error:
             return False
+
+    # Backward-compatible alias for older call sites.
+    def selectors_exists(self, doc_id: str, version_id: str) -> bool:
+        return self.selectors_exist(doc_id, version_id)
     
     # =========================================================================
     # Embeddings Storage (Phase 2)

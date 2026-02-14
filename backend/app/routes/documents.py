@@ -10,7 +10,7 @@ from typing import List, Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.acl.dependencies import get_entitlements
@@ -181,6 +181,31 @@ def _infer_media_type(filename: str, explicit_content_type: Optional[str]) -> st
     return guessed or "application/octet-stream"
 
 
+def _resolve_processing_state(
+    ingest_job: Optional[IngestJob],
+    embed_job: Optional[EmbeddingJob],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return a unified processing state across ingest and embedding jobs.
+
+    Precedence:
+    1. Ingest failure or active ingest always wins.
+    2. Embedding status is used once ingest has completed.
+    3. Completed ingest with no embed job is reported as pending embedding.
+    """
+    if ingest_job and ingest_job.status in {"failed", "pending", "processing", "queued"}:
+        return ingest_job.status, ingest_job.pipeline_stage, ingest_job.error
+
+    if embed_job:
+        return embed_job.status, embed_job.pipeline_stage, embed_job.error
+
+    if ingest_job:
+        if ingest_job.status == "completed":
+            return "pending", "awaiting_embedding", None
+        return ingest_job.status, ingest_job.pipeline_stage, ingest_job.error
+
+    return None, None, None
+
+
 # ============================================
 # Routes
 # ============================================
@@ -245,11 +270,35 @@ async def list_documents(
         for job in embed_jobs:
             if job.doc_id and job.doc_id not in latest_embed_by_doc:
                 latest_embed_by_doc[job.doc_id] = job
+
+    # Get latest ingest job per graph document for unified processing status.
+    latest_ingest_by_doc: dict[str, IngestJob] = {}
+    if doc_ids:
+        ingest_jobs = (
+            db.query(IngestJob)
+            .filter(
+                or_(
+                    IngestJob.graph_doc_id.in_(doc_ids),
+                    IngestJob.doc_id.in_(doc_ids),
+                )
+            )
+            .order_by(desc(IngestJob.created_at))
+            .all()
+        )
+        for job in ingest_jobs:
+            candidate_doc_id = job.graph_doc_id or job.doc_id
+            if candidate_doc_id and candidate_doc_id in doc_ids and candidate_doc_id not in latest_ingest_by_doc:
+                latest_ingest_by_doc[candidate_doc_id] = job
     
     # Build response
     items = []
     for doc in documents:
         latest_embed = latest_embed_by_doc.get(doc.doc_id)
+        latest_ingest = latest_ingest_by_doc.get(doc.doc_id)
+        processing_status, processing_stage, processing_error = _resolve_processing_state(
+            ingest_job=latest_ingest,
+            embed_job=latest_embed,
+        )
         item = DocumentResponse(
             doc_id=doc.doc_id,
             source_uri=doc.source_uri,
@@ -271,9 +320,9 @@ async def list_documents(
             supersedes_doc_id=doc.supersedes_doc_id,
             node_count=node_counts.get(doc.doc_id, 0),
             visibility=doc.visibility,
-            processing_status=latest_embed.status if latest_embed else None,
-            processing_stage=latest_embed.pipeline_stage if latest_embed else None,
-            processing_error=latest_embed.error if latest_embed else None,
+            processing_status=processing_status,
+            processing_stage=processing_stage,
+            processing_error=processing_error,
         )
         items.append(item)
     
@@ -358,6 +407,21 @@ async def get_document(
         .order_by(desc(EmbeddingJob.created_at))
         .first()
     )
+    latest_ingest = (
+        db.query(IngestJob)
+        .filter(
+            or_(
+                IngestJob.graph_doc_id == doc_id,
+                IngestJob.doc_id == doc_id,
+            )
+        )
+        .order_by(desc(IngestJob.created_at))
+        .first()
+    )
+    processing_status, processing_stage, processing_error = _resolve_processing_state(
+        ingest_job=latest_ingest,
+        embed_job=latest_embed,
+    )
     
     return DocumentResponse(
         doc_id=doc.doc_id,
@@ -380,9 +444,9 @@ async def get_document(
         supersedes_doc_id=doc.supersedes_doc_id,
         node_count=node_count,
         visibility=doc.visibility,
-        processing_status=latest_embed.status if latest_embed else None,
-        processing_stage=latest_embed.pipeline_stage if latest_embed else None,
-        processing_error=latest_embed.error if latest_embed else None,
+        processing_status=processing_status,
+        processing_stage=processing_stage,
+        processing_error=processing_error,
     )
 
 
@@ -713,7 +777,6 @@ async def get_raw_document(
         headers={
             "Content-Disposition": f'inline; filename="{filename}"',
             "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
-            "Access-Control-Allow-Origin": "*",  # Allow CORS for frontend
         }
     )
 

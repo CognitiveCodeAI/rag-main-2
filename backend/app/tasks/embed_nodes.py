@@ -105,6 +105,15 @@ def _update_doc_embedding_metadata(
         )
 
 
+def _resolve_final_status(total_indexed: int, errors: list[str]) -> tuple[str, Optional[str]]:
+    """Resolve final embedding job status from indexed count and collected errors."""
+    if total_indexed == 0:
+        return "failed", "No vectors were indexed for this document."
+    if errors:
+        return "partial", "; ".join(errors)
+    return "completed", None
+
+
 @dataclass
 class EmbedNodeResult:
     """Result from embedding a node."""
@@ -358,17 +367,21 @@ def embed_nodes_task(
             f"errors={len(results['errors'])}"
         )
 
-        # Persist embedding metadata to document
-        _update_doc_embedding_metadata(
-            db=db,
-            doc_id=doc_id,
-            version=version,
-            collection_version=collection_version,
-            embedding_model=embed_client.model,
-            embedding_dim=embed_client.dim
-        )
-
-        final_status = "completed" if not results["errors"] else "partial"
+        final_status, final_error = _resolve_final_status(total_indexed, results["errors"])
+        if final_status == "failed":
+            if not results["errors"] and final_error:
+                results["errors"].append(final_error)
+            logger.error(f"[{doc_id}] {final_error}")
+        else:
+            # Persist embedding metadata only when at least one vector has been indexed.
+            _update_doc_embedding_metadata(
+                db=db,
+                doc_id=doc_id,
+                version=version,
+                collection_version=collection_version,
+                embedding_model=embed_client.model,
+                embedding_dim=embed_client.dim
+            )
         results["status"] = final_status
         results["embedding_model"] = embed_client.model
         results["embedding_dim"] = embed_client.dim
@@ -376,6 +389,7 @@ def embed_nodes_task(
         _update_job(
             status=final_status,
             stage="complete",
+            error=final_error,
             record_count=total_embedded,
             total_tokens=total_tokens,
         )
@@ -535,19 +549,29 @@ def embed_document_nodes_sync(
             results["indexed"][type_name] = indexed
             logger.info(f"[{doc_id}] Step 13: Indexed {indexed} vectors")
         
-        # Persist embedding metadata to document
-        logger.info(f"[{doc_id}] Step 14: Updating document embedding metadata")
-        _update_doc_embedding_metadata(
-            db=db,
-            doc_id=doc_id,
-            version=version,
-            collection_version=collection_version,
-            embedding_model=embed_client.model,
-            embedding_dim=embed_client.dim
-        )
-        logger.info(f"[{doc_id}] Step 14: Metadata updated")
-        
-        results["status"] = "completed"
+        total_indexed = sum(results["indexed"].values())
+        errors = results.get("errors", [])
+        final_status, final_error = _resolve_final_status(total_indexed, errors)
+        if final_status == "failed":
+            results.setdefault("errors", [])
+            if final_error and final_error not in results["errors"]:
+                results["errors"].append(final_error)
+            logger.error(f"[{doc_id}] Step 14: {final_error}")
+        else:
+            # Persist embedding metadata to document only on successful index writes.
+            logger.info(f"[{doc_id}] Step 14: Updating document embedding metadata")
+            _update_doc_embedding_metadata(
+                db=db,
+                doc_id=doc_id,
+                version=version,
+                collection_version=collection_version,
+                embedding_model=embed_client.model,
+                embedding_dim=embed_client.dim
+            )
+            logger.info(f"[{doc_id}] Step 14: Metadata updated")
+
+        results["status"] = final_status
+
         results["embedding_model"] = embed_client.model
         results["embedding_dim"] = embed_client.dim
         

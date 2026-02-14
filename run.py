@@ -6,10 +6,12 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,13 @@ class ManagedService:
     proc: subprocess.Popen | None = None
     restart_count: int = 0
     log_handle: object | None = None
+
+
+@dataclass(frozen=True)
+class InfraTarget:
+    name: str
+    host: str
+    port: int
 
 
 def load_backend_env() -> dict:
@@ -90,6 +99,132 @@ def load_backend_env() -> dict:
                     continue
                 env[key] = value
     return env
+
+
+def parse_int(value: str | None, default: int) -> int:
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_host_port(endpoint: str, default_port: int) -> tuple[str, int]:
+    value = endpoint.strip()
+    if "://" in value:
+        parsed = urllib.parse.urlparse(value)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or default_port
+        return host, port
+
+    bare = value.split("/", 1)[0]
+    if ":" in bare:
+        host, port_str = bare.rsplit(":", 1)
+        return host, parse_int(port_str, default_port)
+    return bare, default_port
+
+
+def parse_redis_host_port(redis_url: str) -> tuple[str, int]:
+    normalized = redis_url if "://" in redis_url else f"redis://{redis_url}"
+    parsed = urllib.parse.urlparse(normalized)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    return host, port
+
+
+def get_infra_targets(env: dict) -> list[InfraTarget]:
+    db_host = env.get("DB_HOST", "localhost")
+    db_port = parse_int(env.get("DB_PORT"), 5432)
+    milvus_host = env.get("MILVUS_HOST", "localhost")
+    milvus_port = parse_int(env.get("MILVUS_PORT"), 19530)
+    minio_host, minio_port = parse_host_port(env.get("MINIO_ENDPOINT", "localhost:9000"), 9000)
+    redis_host, redis_port = parse_redis_host_port(env.get("REDIS_URL", "redis://localhost:6379/0"))
+
+    return [
+        InfraTarget(name="postgresql", host=db_host, port=db_port),
+        InfraTarget(name="milvus", host=milvus_host, port=milvus_port),
+        InfraTarget(name="minio", host=minio_host, port=minio_port),
+        InfraTarget(name="redis", host=redis_host, port=redis_port),
+    ]
+
+
+def check_tcp_endpoint(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def missing_infra_targets(targets: list[InfraTarget]) -> list[InfraTarget]:
+    return [target for target in targets if not check_tcp_endpoint(target.host, target.port)]
+
+
+def run_docker_infra_up() -> bool:
+    commands = (
+        ["docker", "compose", "up", "-d"],
+        ["docker-compose", "up", "-d"],
+    )
+    errors: list[str] = []
+    for cmd in commands:
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=ROOT_DIR,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            errors.append(f"{cmd[0]} not found")
+            continue
+
+        if result.returncode == 0:
+            print(f"Infrastructure startup command succeeded: {' '.join(cmd)}")
+            return True
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        errors.append(f"{' '.join(cmd)} failed: {stderr or stdout or 'unknown error'}")
+
+    print("Could not start Docker infrastructure automatically.")
+    for err in errors:
+        print(f"  - {err}")
+    return False
+
+
+def ensure_infrastructure_ready(backend_env: dict, auto_start: bool, timeout: int = 90) -> bool:
+    targets = get_infra_targets(backend_env)
+    missing = missing_infra_targets(targets)
+    if not missing:
+        print("Infrastructure preflight passed.")
+        return True
+
+    print("Infrastructure dependencies are not reachable:")
+    for target in missing:
+        print(f"  - {target.name}: {target.host}:{target.port}")
+
+    if not auto_start:
+        print("Start infrastructure manually (e.g. `docker compose up -d`) and retry.")
+        return False
+
+    print("Attempting to start Docker infrastructure...")
+    if not run_docker_infra_up():
+        return False
+
+    print("Waiting for infrastructure endpoints...", end="", flush=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        missing = missing_infra_targets(targets)
+        if not missing:
+            print(" ready")
+            print("Infrastructure preflight passed.")
+            return True
+        print(".", end="", flush=True)
+        time.sleep(2)
+
+    print(" timeout")
+    print("Infrastructure is still unavailable after startup attempt:")
+    for target in missing:
+        print(f"  - {target.name}: {target.host}:{target.port}")
+    return False
 
 
 def list_listening_pids(port: int) -> list[str]:
@@ -211,7 +346,7 @@ def stop_service(service: ManagedService, timeout: int = 8) -> None:
 
 
 def wait_for_backend(timeout: int = 45) -> bool:
-    url = "http://localhost:8000/health"
+    url = "http://localhost:8000/health/live"
     print("Waiting for backend to be ready...", end="", flush=True)
     start = time.time()
     while time.time() - start < timeout:
@@ -229,7 +364,7 @@ def wait_for_backend(timeout: int = 45) -> bool:
 
 
 def check_services() -> None:
-    url = "http://localhost:8000/health?check_services=true"
+    url = "http://localhost:8000/health/ready"
     try:
         resp = urllib.request.urlopen(url, timeout=10)
         data = json.loads(resp.read().decode())
@@ -318,8 +453,7 @@ def build_celery_command() -> list[str]:
     return cmd
 
 
-def build_services(skip_celery: bool) -> list[ManagedService]:
-    backend_env = load_backend_env()
+def build_services(skip_celery: bool, backend_env: dict) -> list[ManagedService]:
     services = [
         ManagedService(
             name="backend",
@@ -367,6 +501,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run NPR RAG app services")
     parser.add_argument("--no-celery", action="store_true", help="Skip celery worker")
     parser.add_argument(
+        "--skip-infra-check",
+        action="store_true",
+        help="Skip infrastructure preflight checks (PostgreSQL, Milvus, MinIO, Redis)",
+    )
+    parser.add_argument(
+        "--no-auto-infra",
+        action="store_true",
+        help="Do not auto-run `docker compose up -d` when local infrastructure is down",
+    )
+    parser.add_argument(
         "--force-cleanup",
         action="store_true",
         help="Kill listeners on ports 3000 and 8000 before starting",
@@ -392,6 +536,14 @@ def main() -> None:
     if not check_port_conflicts(args.force_cleanup):
         raise SystemExit(1)
 
+    backend_env = load_backend_env()
+    if not args.skip_infra_check:
+        if not ensure_infrastructure_ready(
+            backend_env,
+            auto_start=not args.no_auto_infra,
+        ):
+            raise SystemExit(1)
+
     lock_file = FRONTEND_DIR / ".next" / "dev" / "lock"
     if lock_file.exists():
         try:
@@ -399,7 +551,7 @@ def main() -> None:
         except Exception:
             pass
 
-    SERVICES.extend(build_services(skip_celery=args.no_celery))
+    SERVICES.extend(build_services(skip_celery=args.no_celery, backend_env=backend_env))
     for svc in SERVICES:
         start_service(svc)
 

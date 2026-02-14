@@ -125,6 +125,35 @@ def _ingest_document(filepath, filename, tenant_id, visibility,
     return resp.json()
 
 
+def _cleanup_existing_acl_docs() -> None:
+    """Delete prior ACL test documents so setup is idempotent across reruns."""
+    deleted = 0
+    # Re-query page 1 repeatedly because deleting items mutates pagination.
+    for _ in range(20):
+        resp = requests.get(
+            f"{BASE_URL}/v1/documents",
+            params={"search": "acl_test_", "page": 1, "limit": 100},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            break
+
+        items = resp.json().get("items", [])
+        if not items:
+            break
+
+        for item in items:
+            doc_id = item.get("doc_id")
+            if not doc_id:
+                continue
+            d = requests.delete(f"{BASE_URL}/v1/documents/{doc_id}", timeout=30)
+            if d.status_code in (204, 404):
+                deleted += 1
+
+    if deleted:
+        print(f"Cleaned up {deleted} pre-existing ACL test documents")
+
+
 def _wait_for_job(job_id, timeout=120):
     """Poll job status until completed or failed."""
     start = time.time()
@@ -146,6 +175,7 @@ class TestACLEndToEnd:
     # Populated during setup
     doc_ids = {}
     _original_env = {}
+    acl_enabled = False
 
     @classmethod
     def setup_class(cls):
@@ -157,6 +187,9 @@ class TestACLEndToEnd:
         # Verify backend is reachable
         resp = requests.get(f"{BASE_URL}/health")
         assert resp.status_code == 200, f"Backend not reachable at {BASE_URL}"
+        cls.acl_enabled = bool(resp.json().get("features", {}).get("acl_enabled", False))
+        print(f"ACL enabled on backend: {cls.acl_enabled}")
+        _cleanup_existing_acl_docs()
 
         # --- Create test files ---
 
@@ -237,7 +270,14 @@ class TestACLEndToEnd:
         for label, job_id in jobs:
             try:
                 result = _wait_for_job(job_id)
-                print(f"  [{label}] COMPLETED (doc_id={result.get('doc_id', 'N/A')})")
+                resolved_doc_id = result.get("graph_doc_id") or result.get("doc_id")
+                if resolved_doc_id:
+                    cls.doc_ids[label] = resolved_doc_id
+                print(
+                    f"  [{label}] COMPLETED "
+                    f"(doc_id={resolved_doc_id or 'N/A'}, "
+                    f"legacy_doc_id={result.get('doc_id', 'N/A')})"
+                )
             except Exception as e:
                 print(f"  [{label}] FAILED: {e}")
                 # Continue — some tests can still run
@@ -246,6 +286,17 @@ class TestACLEndToEnd:
         print("=" * 70)
         print("SETUP COMPLETE — Tests beginning")
         print("=" * 70 + "\n")
+
+    def setup_method(self, method):
+        """Skip ACL-enforcement phases when backend ACL is disabled."""
+        if self.acl_enabled:
+            return
+        allowed_without_acl = {
+            "test_00_acl_disabled_list_shows_all",
+            "test_01_acl_disabled_get_restricted_doc",
+        }
+        if method.__name__ not in allowed_without_acl:
+            pytest.skip("Backend ACL is disabled; skipping ACL enforcement assertions")
 
     # =========================================================================
     # Phase 1: Tests with ACL DISABLED (default state)

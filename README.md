@@ -133,7 +133,7 @@ npm run dev
 
 Access UI at: http://localhost:3000
 
-### 6. Start Celery Worker (Optional - for background processing)
+### 6. Start Celery Worker (Required for ingestion/embedding jobs)
 
 ```bash
 # In a new terminal, with venv activated

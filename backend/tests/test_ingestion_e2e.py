@@ -23,6 +23,7 @@ import time
 import json
 import hashlib
 from pathlib import Path
+import pytest
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -333,6 +334,25 @@ def test_api_upload():
         import traceback
         traceback.print_exc()
         return False
+
+
+@pytest.fixture(scope="module")
+def api_upload_result():
+    """Upload one document through the API and share identifiers across tests."""
+    result = test_api_upload()
+    if not result or result == "SKIPPED":
+        pytest.skip("Ingestion E2E setup skipped: API upload not available")
+    return result
+
+
+@pytest.fixture(scope="module")
+def doc_id(api_upload_result):
+    return api_upload_result["doc_id"]
+
+
+@pytest.fixture(scope="module")
+def version_id(api_upload_result):
+    return api_upload_result["version_id"]
 
 
 def test_raw_uploaded(doc_id: str, version_id: str):

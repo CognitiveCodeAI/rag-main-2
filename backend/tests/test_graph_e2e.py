@@ -12,6 +12,7 @@ Tests the full ingestion flow:
 import sys
 import logging
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -57,6 +58,12 @@ def test_page_extraction():
     
     assert result.total_pages > 0, "No pages extracted"
     return result
+
+
+@pytest.fixture(scope="module")
+def extraction_result():
+    """Provide page extraction output for downstream chunking checks."""
+    return test_page_extraction()
 
 
 def test_chunking(extraction_result):

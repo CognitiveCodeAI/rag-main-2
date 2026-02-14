@@ -9,9 +9,12 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.acl.dependencies import get_entitlements
+from app.acl.models import Entitlements
+from app.acl.postgres_filter import ACLPostgresFilter
 from app.db.session import session_scope
 from app.db.models import EmbeddingJob
 from app.db.graph_models import DocumentGraph, Node
@@ -239,6 +242,7 @@ async def list_embed_jobs(
     doc_id: Optional[str] = None,
     page: int = 1,
     limit: int = 20,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> EmbedJobListResponse:
     """List embedding jobs with optional filtering.
     
@@ -256,6 +260,18 @@ async def list_embed_jobs(
     
     with session_scope() as session:
         query = session.query(EmbeddingJob)
+
+        accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(session, entitlements)
+        if accessible_doc_ids is not None:
+            if not accessible_doc_ids:
+                return EmbedJobListResponse(
+                    items=[],
+                    total=0,
+                    page=page,
+                    limit=limit,
+                    has_more=False,
+                )
+            query = query.filter(EmbeddingJob.doc_id.in_(accessible_doc_ids))
         
         if status:
             query = query.filter(EmbeddingJob.status == status)

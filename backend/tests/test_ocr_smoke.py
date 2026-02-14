@@ -14,6 +14,7 @@ import sys
 import argparse
 import base64
 from pathlib import Path
+import pytest
 
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -91,6 +92,15 @@ def test_ocr_client_init():
     except Exception as e:
         print(f"✗ Failed to init client: {e}")
         return None
+
+
+@pytest.fixture(scope="module")
+def client():
+    """Provide initialized OCR client or skip OCR-bound tests."""
+    c = test_ocr_client_init()
+    if c is None:
+        pytest.skip("OCR client unavailable")
+    return c
 
 
 def test_health_check(client):

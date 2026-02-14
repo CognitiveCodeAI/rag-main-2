@@ -1365,7 +1365,7 @@ Return JSON only in the following format:
                     if not (
                         storage.canonical_view_exists(graph_doc.doc_id, str(graph_doc.version))
                         and storage.source_map_exists(graph_doc.doc_id, str(graph_doc.version))
-                        and storage.selectors_exists(graph_doc.doc_id, str(graph_doc.version))
+                        and storage.selectors_exist(graph_doc.doc_id, str(graph_doc.version))
                     ):
                         ensure_highlight_artifacts(self.db, graph_doc, storage=storage)
                         logger.info(f"[QA] selector_backfill_count +1 doc={graph_doc.doc_id}")
@@ -1394,7 +1394,7 @@ Return JSON only in the following format:
                 selector_key = f"{graph_doc.doc_id}:{graph_doc.version}"
                 if selector_key not in selectors_cache:
                     selectors_cache[selector_key] = {}
-                    if storage.selectors_exists(graph_doc.doc_id, str(graph_doc.version)):
+                    if storage.selectors_exist(graph_doc.doc_id, str(graph_doc.version)):
                         try:
                             selectors = storage.get_selectors(graph_doc.doc_id, str(graph_doc.version))
                             selectors_cache[selector_key] = {

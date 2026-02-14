@@ -1,6 +1,7 @@
 """QA API endpoints for question answering."""
 
 import logging
+import uuid
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -200,8 +201,12 @@ def ask_question(
         )
         
     except Exception as e:
-        logger.error(f"[API] Ask failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        error_id = str(uuid.uuid4())
+        logger.error(f"[API] Ask failed (error_id={error_id}): {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error (error_id={error_id})",
+        )
 
 
 @router.get("/health")

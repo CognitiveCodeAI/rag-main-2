@@ -43,6 +43,13 @@ class TestHealthEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data.get("status") in ["ok", "healthy"]
+
+    def test_health_live_endpoint(self):
+        """Liveness endpoint should always be available without dependency checks."""
+        response = client.get("/health/live")
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("status") == "healthy"
     
     def test_qa_health(self):
         """QA health endpoint should return ok status."""
@@ -126,10 +133,19 @@ class TestIngestSuccess:
     @patch("app.routes.ingest.inspect_celery_workers")
     @patch("app.routes.ingest.ingest_document_task")
     @patch("app.routes.ingest.get_storage_client")
-    def test_pdf_ingestion_success(self, mock_storage, mock_task, mock_worker_status, mock_fitz_open):
+    @patch("app.routes.ingest._require_embedding_config")
+    def test_pdf_ingestion_success(
+        self,
+        mock_require_embedding,
+        mock_storage,
+        mock_task,
+        mock_worker_status,
+        mock_fitz_open,
+    ):
         """PDF upload should succeed and return job info."""
         from app.services.worker_health import CeleryWorkerStatus
 
+        mock_require_embedding.return_value = None
         mock_storage.return_value = MagicMock()
         mock_task.delay = MagicMock()
         mock_fitz_open.return_value.__enter__.return_value = MagicMock()
@@ -160,10 +176,19 @@ class TestIngestSuccess:
     @patch("app.routes.ingest.inspect_celery_workers")
     @patch("app.routes.ingest.ingest_document_task")
     @patch("app.routes.ingest.get_storage_client")
-    def test_custom_doc_id_respected(self, mock_storage, mock_task, mock_worker_status, mock_fitz_open):
+    @patch("app.routes.ingest._require_embedding_config")
+    def test_custom_doc_id_respected(
+        self,
+        mock_require_embedding,
+        mock_storage,
+        mock_task,
+        mock_worker_status,
+        mock_fitz_open,
+    ):
         """Custom doc_id should be used when provided."""
         from app.services.worker_health import CeleryWorkerStatus
 
+        mock_require_embedding.return_value = None
         mock_storage.return_value = MagicMock()
         mock_task.delay = MagicMock()
         mock_fitz_open.return_value.__enter__.return_value = MagicMock()
@@ -226,8 +251,10 @@ class TestIngestSuccess:
     @patch("app.routes.ingest.inspect_celery_workers")
     @patch("app.routes.ingest.ingest_document_task")
     @patch("app.routes.ingest.get_storage_client")
+    @patch("app.routes.ingest._require_embedding_config")
     def test_process_preview_queues_ingestion_with_metadata_overrides(
         self,
+        mock_require_embedding,
         mock_storage,
         mock_task,
         mock_worker_status,
@@ -238,6 +265,7 @@ class TestIngestSuccess:
         from app.db.session import session_scope
         from app.services.worker_health import CeleryWorkerStatus
 
+        mock_require_embedding.return_value = None
         mock_fitz_open.return_value.__enter__.return_value = MagicMock()
         storage_client = MagicMock()
         storage_client.get_raw.return_value = b"%PDF-1.4 staged content"
@@ -302,8 +330,31 @@ class TestIngestSuccess:
 class TestQAValidation:
     """Test /v1/qa endpoint validation."""
     
-    def test_missing_doc_id(self):
+    @patch("app.routes.qa.QARunner")
+    def test_missing_doc_id(self, mock_runner_class):
         """Missing doc_id is allowed (query can run across all docs)."""
+        mock_runner = MagicMock()
+        mock_runner_class.return_value = mock_runner
+        mock_result = MagicMock()
+        mock_result.to_dict.return_value = {
+            "question": "What is the fee?",
+            "doc_id": None,
+            "seed_nodes": [],
+            "expanded_nodes": [],
+            "edge_traces": [],
+            "packed_context": "",
+            "context_node_ids": [],
+            "total_context_tokens": 0,
+            "answer": "Mock answer",
+            "citations": [],
+            "model_id": "mock-model",
+            "timing": {"total_ms": 1},
+            "metadata": {},
+            "success": True,
+            "error": None,
+        }
+        mock_runner.run.return_value = mock_result
+
         response = client.post(
             "/v1/qa/ask",
             json={"question": "What is the fee?"}
@@ -465,7 +516,9 @@ class TestQAErrorHandling:
         )
         
         assert response.status_code == 500
-        assert "database" in response.json().get("detail", "").lower()
+        detail = response.json().get("detail", "")
+        assert "internal server error" in detail.lower()
+        assert "error_id=" in detail
 
 
 # =============================================================================

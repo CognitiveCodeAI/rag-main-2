@@ -13,6 +13,7 @@ import sys
 import time
 import json
 from pathlib import Path
+import pytest
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -113,6 +114,15 @@ def test_step1_ingest_document():
     
     print("  FAIL: Ingest timed out")
     return None
+
+
+@pytest.fixture(scope="module")
+def doc_info():
+    """Ingest one test document and provide identity for downstream steps."""
+    info = test_step1_ingest_document()
+    if not info:
+        pytest.skip("Embedding E2E setup failed: ingestion did not complete")
+    return info
 
 
 def test_step2_trigger_embedding(doc_info: dict):

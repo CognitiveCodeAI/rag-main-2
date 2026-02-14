@@ -1,6 +1,7 @@
 """Test Neo4j connection."""
 
 import os
+import pytest
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
@@ -17,16 +18,27 @@ def get_driver():
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 
+def _require_neo4j():
+    """Return a verified driver or skip if Neo4j is unavailable."""
+    driver = get_driver()
+    try:
+        driver.verify_connectivity()
+        return driver
+    except Exception as e:
+        try:
+            driver.close()
+        except Exception:
+            pass
+        pytest.skip(f"Neo4j unavailable at {NEO4J_URI}: {e}")
+
+
 def test_connection():
     """Test basic connection to Neo4j."""
     print("Testing Neo4j connection...")
     print(f"  URI: {NEO4J_URI}")
     print(f"  User: {NEO4J_USER}")
     
-    driver = get_driver()
-    
-    # Verify connectivity
-    driver.verify_connectivity()
+    driver = _require_neo4j()
     print(f"\n✓ Connected to Neo4j!")
     
     # Get server info
@@ -43,7 +55,7 @@ def test_connection():
 
 def test_database_info():
     """Get database information."""
-    driver = get_driver()
+    driver = _require_neo4j()
     
     with driver.session() as session:
         # Count nodes
@@ -68,7 +80,7 @@ def test_database_info():
 
 def test_graph_operations():
     """Test node/relationship create/query/delete operations."""
-    driver = get_driver()
+    driver = _require_neo4j()
     
     with driver.session() as session:
         # Create test nodes

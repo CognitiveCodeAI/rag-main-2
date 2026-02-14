@@ -8,11 +8,14 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import fitz  # PyMuPDF, used to pre-validate PDF uploads
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func as sa_func
+from sqlalchemy import func as sa_func, or_
 
+from app.acl.dependencies import get_entitlements
+from app.acl.models import Entitlements
+from app.acl.postgres_filter import ACLPostgresFilter
 from app.config import get_settings
 from app.db.graph_models import ContentRegistry, DocumentGraph, Node
 from app.db.models import Document, IngestJob, IngestPreview
@@ -478,7 +481,6 @@ async def metadata_preview(
 @router.post("/process", response_model=IngestResponse)
 async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse:
     """Process a previously staged preview after metadata review/editing."""
-    _require_embedding_config()
     _validate_ingestion_backend(req.ingestion_backend)
     _validate_visibility(req.visibility)
 
@@ -535,6 +537,7 @@ async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse
                 f"{worker_status.message} Start a Celery worker and retry."
             ),
         )
+    _require_embedding_config()
 
     storage = get_storage_client()
     try:
@@ -652,9 +655,9 @@ async def ingest_document(
     filename = file.filename or "document"
 
     _validate_pdf_if_needed(content, filename, file.content_type)
-    _require_embedding_config()
     detected_type = _validate_source_type(filename, file.content_type, source_type)
     _validate_ingestion_backend(ingestion_backend)
+    _validate_visibility(visibility)
     
     # Generate IDs
     doc_id = doc_id or generate_doc_id(content, filename)
@@ -682,6 +685,7 @@ async def ingest_document(
                 f"{worker_status.message} Start a Celery worker and retry."
             ),
         )
+    _require_embedding_config()
 
     # Store raw file in MinIO
     storage = get_storage_client()
@@ -720,8 +724,6 @@ async def ingest_document(
     parsed_roles = _parse_json_list(allowed_roles)
     parsed_groups = _parse_json_list(allowed_groups)
     parsed_users = _parse_json_list(allowed_users)
-
-    _validate_visibility(visibility)
 
     # Queue Celery task
     ingest_document_task.delay(
@@ -882,6 +884,7 @@ async def list_ingest_jobs(
     status: Optional[str] = None,
     page: int = 1,
     limit: int = 20,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> IngestJobListResponse:
     """List ingestion jobs with optional filtering.
     
@@ -898,6 +901,23 @@ async def list_ingest_jobs(
     
     with session_scope() as session:
         query = session.query(IngestJob)
+
+        accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(session, entitlements)
+        if accessible_doc_ids is not None:
+            if not accessible_doc_ids:
+                return IngestJobListResponse(
+                    items=[],
+                    total=0,
+                    page=page,
+                    limit=limit,
+                    has_more=False,
+                )
+            query = query.filter(
+                or_(
+                    IngestJob.graph_doc_id.in_(accessible_doc_ids),
+                    IngestJob.doc_id.in_(accessible_doc_ids),
+                )
+            )
         
         if status:
             query = query.filter(IngestJob.status == status)
