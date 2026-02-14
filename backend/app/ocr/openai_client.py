@@ -9,6 +9,7 @@ import logging
 import time
 from typing import Optional
 
+import httpx
 from openai import OpenAI
 
 from app.config import get_settings
@@ -173,7 +174,9 @@ class OpenAIOCRClient:
 
         try:
             # Use the Responses API with vision input
-            response = self.client.responses.create(
+            response = self.client.with_options(
+                timeout=httpx.Timeout(timeout),
+            ).responses.create(
                 model=self.model,
                 input=[
                     {

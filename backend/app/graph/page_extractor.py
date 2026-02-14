@@ -190,6 +190,7 @@ class PageExtractor:
         # Try native text extraction first
         native_text = page.get_text("text").strip()
         has_text_layer = len(native_text) > 0
+        native_char_count = len(native_text)
         
         # Calculate quality score
         quality_score = self._compute_quality_score(native_text)
@@ -198,14 +199,28 @@ class PageExtractor:
         text_spans = self._extract_text_spans(page)
         
         # Decide whether to use OCR (unless skip_ocr is set)
-        use_ocr = not self.skip_ocr and (force_ocr or quality_score < self.quality_threshold)
+        use_ocr = self._should_use_ocr(
+            has_text_layer=has_text_layer,
+            native_char_count=native_char_count,
+            quality_score=quality_score,
+            force_ocr=force_ocr,
+        )
 
         if use_ocr:
             logger.info(f"[{doc_id}] Page {page_no}: Using OCR (quality={quality_score:.2f}, threshold={self.quality_threshold})")
-            text_md, text_plain = self._ocr_page(page, page_no, doc_id)
-            used_ocr = True
-            # Note: OCR doesn't provide bbox, so text_spans will be from native extraction
-            # This is still useful for fallback text search
+            try:
+                text_md, text_plain = self._ocr_page(page, page_no, doc_id)
+                used_ocr = True
+                # Note: OCR doesn't provide bbox, so text_spans will be from native extraction
+                # This is still useful for fallback text search
+            except Exception as e:
+                # Fail open to native text so one OCR page cannot block the entire document ingest.
+                logger.warning(
+                    f"[{doc_id}] Page {page_no}: OCR failed, falling back to native text: {e}"
+                )
+                text_md = native_text
+                text_plain = native_text
+                used_ocr = False
         elif self.skip_ocr and quality_score < self.quality_threshold:
             logger.warning(f"[{doc_id}] Page {page_no}: Low quality but OCR skipped (quality={quality_score:.2f})")
             text_md = native_text
@@ -232,6 +247,38 @@ class PageExtractor:
                 "final_char_count": len(text_plain),
                 "text_span_count": len(text_spans),
             }
+        )
+
+    def _should_use_ocr(
+        self,
+        *,
+        has_text_layer: bool,
+        native_char_count: int,
+        quality_score: float,
+        force_ocr: bool,
+    ) -> bool:
+        """Determine whether OCR should run for a page.
+
+        Policy:
+        - `force_ocr` always wins.
+        - `skip_ocr` always disables OCR.
+        - Pages with no text layer use OCR.
+        - Text-layer pages default to native text unless explicit fallback is enabled.
+        """
+        if force_ocr:
+            return True
+        if self.skip_ocr:
+            return False
+        if not has_text_layer:
+            return True
+
+        if not self.settings.ocr_text_layer_fallback_enabled:
+            return False
+
+        # Only OCR short, low-quality text-layer pages when fallback is enabled.
+        return (
+            native_char_count < self.settings.ocr_text_layer_min_chars
+            and quality_score < self.quality_threshold
         )
     
     def _extract_text_spans(self, page: fitz.Page) -> List[TextSpan]:

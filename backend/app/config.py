@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     ocr_timeout: int = 120  # seconds for full page OCR
     ocr_region_timeout: int = 60  # seconds for region OCR
     ocr_max_retries: int = 3
+    ocr_text_layer_fallback_enabled: bool = False  # OCR low-quality pages even when text layer exists
+    ocr_text_layer_min_chars: int = 200  # Only OCR text-layer pages below this char count
 
     # Ollama OCR settings (if ocr_provider="ollama")
     ollama_base_url: str = "http://localhost:11434"
@@ -129,6 +131,13 @@ class Settings(BaseSettings):
     def validate_upload_max_file_size_mb(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("upload_max_file_size_mb must be > 0")
+        return v
+
+    @field_validator("ocr_text_layer_min_chars")
+    @classmethod
+    def validate_ocr_text_layer_min_chars(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("ocr_text_layer_min_chars must be >= 0")
         return v
     
     class Config:
