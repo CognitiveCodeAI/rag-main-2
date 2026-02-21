@@ -1,6 +1,7 @@
 """Settings API endpoints for runtime configuration."""
 
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -106,8 +107,15 @@ async def get_settings(db: Session = Depends(get_session)) -> AppSettingsRespons
         settings_row = get_or_create_settings(db)
         return _model_to_response(settings_row)
     except Exception as e:
-        logger.error(f"Failed to get settings: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get settings: {str(e)}")
+        error_id = str(uuid.uuid4())
+        logger.error(
+            f"Failed to get settings (error_id={error_id}): {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error (error_id={error_id})",
+        )
 
 
 @router.put("", response_model=AppSettingsResponse)
@@ -133,9 +141,14 @@ async def update_app_settings(
         return _model_to_response(settings_row)
 
     except Exception as e:
-        logger.error(f"Failed to update settings: {e}")
+        error_id = str(uuid.uuid4())
+        logger.error(
+            f"Failed to update settings (error_id={error_id}): {e}",
+            exc_info=True,
+        )
         raise HTTPException(
-            status_code=500, detail=f"Failed to update settings: {str(e)}"
+            status_code=500,
+            detail=f"Internal server error (error_id={error_id})",
         )
 
 
@@ -153,7 +166,12 @@ async def reset_app_settings(
         return _model_to_response(settings_row)
 
     except Exception as e:
-        logger.error(f"Failed to reset settings: {e}")
+        error_id = str(uuid.uuid4())
+        logger.error(
+            f"Failed to reset settings (error_id={error_id}): {e}",
+            exc_info=True,
+        )
         raise HTTPException(
-            status_code=500, detail=f"Failed to reset settings: {str(e)}"
+            status_code=500,
+            detail=f"Internal server error (error_id={error_id})",
         )

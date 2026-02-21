@@ -12,6 +12,7 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import sys
@@ -131,6 +132,26 @@ class TestIngestValidation:
         """Non-existent document should return 404."""
         response = client.get("/v1/ingest/document/nonexistent-doc-id/versions")
         assert response.status_code == 404
+
+    def test_parse_json_list_rejects_invalid_json(self):
+        """Malformed ACL JSON payloads should fail with 400."""
+        from app.routes.ingest import _parse_json_list
+
+        with pytest.raises(HTTPException) as exc:
+            _parse_json_list("not-json", "allowed_roles")
+
+        assert exc.value.status_code == 400
+        assert "allowed_roles" in str(exc.value.detail)
+
+    def test_parse_json_list_rejects_non_string_entries(self):
+        """ACL list payload must contain only strings."""
+        from app.routes.ingest import _parse_json_list
+
+        with pytest.raises(HTTPException) as exc:
+            _parse_json_list('["analyst", 123]', "allowed_roles")
+
+        assert exc.value.status_code == 400
+        assert "allowed_roles" in str(exc.value.detail)
 
     @patch("app.routes.ingest.fitz.open")
     @patch("app.routes.ingest.inspect_celery_workers")
@@ -587,6 +608,64 @@ class TestRetrieveValidation:
             }
         )
         assert response.status_code == 422
+
+    @patch("app.routes.retrieve.GraphVectorIndex")
+    @patch("app.routes.retrieve.get_embedding_client")
+    def test_vector_search_accepts_top_level_doc_id_filter(
+        self,
+        mock_get_embedding_client,
+        mock_vector_index_cls,
+    ):
+        """Top-level doc_id should be honored for backward compatibility."""
+        mock_embed_client = MagicMock()
+        mock_embed_client.embed_single.return_value = ([0.1, 0.2, 0.3], {})
+        mock_get_embedding_client.return_value = mock_embed_client
+
+        mock_vector_index = MagicMock()
+        mock_vector_index.search.return_value = []
+        mock_vector_index_cls.return_value = mock_vector_index
+
+        response = client.post(
+            "/v1/retrieve/vector",
+            json={"query": "test query", "doc_id": "doc-123"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 0
+        assert mock_vector_index.search.call_args.kwargs["doc_id_filter"] == "doc-123"
+
+    @patch("app.routes.retrieve.get_embedding_client")
+    def test_vector_search_redacts_internal_exception_detail(self, mock_get_embedding_client):
+        """Internal retrieval exceptions should return stable error IDs."""
+        mock_get_embedding_client.side_effect = Exception("sensitive-uri")
+
+        response = client.post(
+            "/v1/retrieve/vector",
+            json={"query": "test query"},
+        )
+
+        assert response.status_code == 500
+        detail = response.json().get("detail", "")
+        assert "internal server error" in detail.lower()
+        assert "error_id=" in detail
+        assert "sensitive-uri" not in detail
+
+
+class TestSettingsErrorHandling:
+    """Test /v1/settings error response hardening."""
+
+    @patch("app.routes.settings.get_or_create_settings")
+    def test_get_settings_redacts_internal_exception_detail(self, mock_get_settings):
+        """Settings endpoint should not leak raw exception messages."""
+        mock_get_settings.side_effect = Exception("db://secret")
+
+        response = client.get("/v1/settings")
+
+        assert response.status_code == 500
+        detail = response.json().get("detail", "")
+        assert "internal server error" in detail.lower()
+        assert "error_id=" in detail
+        assert "db://secret" not in detail
 
 
 # =============================================================================

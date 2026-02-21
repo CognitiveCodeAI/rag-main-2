@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.acl.dependencies import get_entitlements
+from app.acl.models import Entitlements
 from app.db.models import Document, EmbeddingJob, IngestJob
 from app.db.session import session_scope
 from main import app
@@ -104,6 +106,113 @@ def test_list_embed_jobs_applies_acl_filter_to_doc_ids():
         assert len(data["items"]) == 1
         assert data["items"][0]["job_id"] == str(job_allow_id)
     finally:
+        with session_scope() as session:
+            session.query(EmbeddingJob).filter(EmbeddingJob.job_id.in_([job_allow_id, job_deny_id])).delete(
+                synchronize_session=False
+            )
+
+
+def test_get_ingest_job_applies_acl_filter_to_doc_and_graph_ids():
+    doc_allow = f"acl-ingest-get-allow-{uuid.uuid4().hex[:8]}"
+    doc_deny = f"acl-ingest-get-deny-{uuid.uuid4().hex[:8]}"
+    graph_allow = f"graph-ingest-get-allow-{uuid.uuid4().hex[:8]}"
+    graph_deny = f"graph-ingest-get-deny-{uuid.uuid4().hex[:8]}"
+    job_allow_id = uuid.uuid4()
+    job_deny_id = uuid.uuid4()
+
+    app.dependency_overrides[get_entitlements] = lambda: Entitlements(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        roles=frozenset(),
+        groups=frozenset(),
+        is_admin=False,
+    )
+
+    with session_scope() as session:
+        session.merge(_make_document(doc_allow))
+        session.merge(_make_document(doc_deny))
+        session.add(
+            IngestJob(
+                job_id=job_allow_id,
+                doc_id=doc_allow,
+                graph_doc_id=graph_allow,
+                status="pending",
+            )
+        )
+        session.add(
+            IngestJob(
+                job_id=job_deny_id,
+                doc_id=doc_deny,
+                graph_doc_id=graph_deny,
+                status="pending",
+            )
+        )
+
+    try:
+        with patch("app.routes.ingest.ACLPostgresFilter.get_accessible_doc_ids", return_value={graph_allow}):
+            allowed_response = client.get(f"/v1/ingest/job/{job_allow_id}")
+            denied_response = client.get(f"/v1/ingest/job/{job_deny_id}")
+
+        assert allowed_response.status_code == 200
+        assert allowed_response.json()["job_id"] == str(job_allow_id)
+
+        # Default disclosure mode is opaque, so denied access maps to 404.
+        assert denied_response.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_entitlements, None)
+        with session_scope() as session:
+            session.query(IngestJob).filter(IngestJob.job_id.in_([job_allow_id, job_deny_id])).delete(
+                synchronize_session=False
+            )
+            session.query(Document).filter(Document.doc_id.in_([doc_allow, doc_deny])).delete(
+                synchronize_session=False
+            )
+
+
+def test_get_embed_job_applies_acl_filter_to_doc_ids():
+    doc_allow = f"acl-embed-get-allow-{uuid.uuid4().hex[:8]}"
+    doc_deny = f"acl-embed-get-deny-{uuid.uuid4().hex[:8]}"
+    job_allow_id = uuid.uuid4()
+    job_deny_id = uuid.uuid4()
+
+    app.dependency_overrides[get_entitlements] = lambda: Entitlements(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        roles=frozenset(),
+        groups=frozenset(),
+        is_admin=False,
+    )
+
+    with session_scope() as session:
+        session.add(
+            EmbeddingJob(
+                job_id=job_allow_id,
+                doc_id=doc_allow,
+                version_id="1",
+                status="pending",
+            )
+        )
+        session.add(
+            EmbeddingJob(
+                job_id=job_deny_id,
+                doc_id=doc_deny,
+                version_id="1",
+                status="pending",
+            )
+        )
+
+    try:
+        with patch("app.routes.embed.ACLPostgresFilter.get_accessible_doc_ids", return_value={doc_allow}):
+            allowed_response = client.get(f"/v1/embed/job/{job_allow_id}")
+            denied_response = client.get(f"/v1/embed/job/{job_deny_id}")
+
+        assert allowed_response.status_code == 200
+        assert allowed_response.json()["job_id"] == str(job_allow_id)
+
+        # Default disclosure mode is opaque, so denied access maps to 404.
+        assert denied_response.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_entitlements, None)
         with session_scope() as session:
             session.query(EmbeddingJob).filter(EmbeddingJob.job_id.in_([job_allow_id, job_deny_id])).delete(
                 synchronize_session=False

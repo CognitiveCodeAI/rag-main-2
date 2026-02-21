@@ -1586,7 +1586,10 @@ def run_propagation_safety_evaluation(
             doc_id = compute_doc_id(f.read())
     else:
         logger.error(f"Document not found: {pdf_full_path}")
-        raise FileNotFoundError(f"Document not found: {pdf_full_path}")
+        raise FileNotFoundError(
+            f"Document not found: {pdf_full_path}. "
+            "Place local eval documents under backend/tests/docs/ (see backend/tests/docs/README.md)."
+        )
     
     report = PropSafetyReport(
         doc_id=doc_id,
@@ -1882,7 +1885,10 @@ def run_tracklike_evaluation(
             doc_id = compute_doc_id(f.read())
     else:
         logger.error(f"Document not found: {pdf_full_path}")
-        raise FileNotFoundError(f"Document not found: {pdf_full_path}")
+        raise FileNotFoundError(
+            f"Document not found: {pdf_full_path}. "
+            "Place local eval documents under backend/tests/docs/ (see backend/tests/docs/README.md)."
+        )
     
     report = TrackLikeReport(
         doc_id=doc_id,

@@ -160,19 +160,45 @@ def generate_version_id() -> str:
     return f"v{ts}-{rand}"
 
 
-def _parse_json_list(raw: Optional[str]) -> Optional[list]:
-    """Parse a JSON array string from multipart form fields."""
-    if not raw:
+def _parse_json_list(raw: Optional[str], field_name: str) -> Optional[list[str]]:
+    """Parse and validate a JSON array-of-strings from multipart form fields."""
+    if raw is None or raw == "":
         return None
+
     try:
         parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return parsed
     except (json.JSONDecodeError, TypeError):
-        pass
-    # SECURITY ASSUMPTION:
-    # Malformed ACL list payloads are treated as None; callers must not interpret None as stricter-than-requested access.
-    return None
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name}: expected JSON array of strings.",
+        )
+
+    if not isinstance(parsed, list):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name}: expected JSON array of strings.",
+        )
+
+    normalized: list[str] = []
+    for item in parsed:
+        if not isinstance(item, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid {field_name}: expected JSON array of strings.",
+            )
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+
+    return normalized
+
+
+def _raise_acl_access_denied(resource_name: str) -> None:
+    """Raise ACL denial with disclosure mode semantics."""
+    settings = get_settings()
+    if settings.acl_disclosure_mode == "opaque":
+        raise HTTPException(status_code=404, detail=f"{resource_name} not found")
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 def _validate_pdf_if_needed(content: bytes, filename: str, content_type: Optional[str]) -> None:
@@ -770,9 +796,9 @@ async def ingest_document(
         session.flush()
         job_id = str(job.job_id)
     
-    parsed_roles = _parse_json_list(allowed_roles)
-    parsed_groups = _parse_json_list(allowed_groups)
-    parsed_users = _parse_json_list(allowed_users)
+    parsed_roles = _parse_json_list(allowed_roles, "allowed_roles")
+    parsed_groups = _parse_json_list(allowed_groups, "allowed_groups")
+    parsed_users = _parse_json_list(allowed_users, "allowed_users")
 
     # SIDE EFFECT:
     # DB state is committed before broker publish; enqueue failures leave pending jobs requiring explicit recovery/retry tooling.
@@ -800,7 +826,10 @@ async def ingest_document(
 
 
 @router.get("/job/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str) -> JobStatusResponse:
+async def get_job_status(
+    job_id: str,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> JobStatusResponse:
     """Get the status of an ingestion job.
     
     Args:
@@ -818,6 +847,18 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
         job = session.query(IngestJob).filter_by(job_id=job_uuid).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+
+        if entitlements is not None:
+            accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(
+                session, entitlements
+            )
+            candidate_doc_ids = {
+                candidate
+                for candidate in (job.graph_doc_id, job.doc_id)
+                if candidate
+            }
+            if not candidate_doc_ids or not (candidate_doc_ids & accessible_doc_ids):
+                _raise_acl_access_denied("Job")
         
         return JobStatusResponse(
             job_id=str(job.job_id),

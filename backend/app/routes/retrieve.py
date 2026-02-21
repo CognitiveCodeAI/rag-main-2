@@ -1,6 +1,7 @@
 """Vector retrieval API endpoints."""
 
 import logging
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -39,6 +40,10 @@ class VectorRetrieveRequest(BaseModel):
         description="View to search (chunks, figures, or tables)"
     )
     top_k: int = Field(default=10, ge=1, le=100, description="Number of results")
+    doc_id: Optional[str] = Field(
+        default=None,
+        description="Deprecated top-level document filter (prefer filters.doc_id)",
+    )
     filters: Optional[dict] = Field(
         default=None,
         description="Optional filters (e.g., {\"doc_id\": \"...\"})"
@@ -97,8 +102,10 @@ async def retrieve_vectors(
         # Search using GraphVectorIndex
         vector_index = GraphVectorIndex()
         
-        # Build doc_id filter if provided
-        doc_id_filter = request.filters.get("doc_id") if request.filters else None
+        # Build doc_id filter if provided (prefer structured filters for compatibility).
+        doc_id_filter = request.doc_id
+        if request.filters and request.filters.get("doc_id"):
+            doc_id_filter = request.filters.get("doc_id")
         
         results = vector_index.search(
             node_type=node_type,
@@ -153,8 +160,15 @@ async def retrieve_vectors(
         )
     
     except Exception as e:
-        logger.error(f"Vector retrieval failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_id = str(uuid.uuid4())
+        logger.error(
+            f"Vector retrieval failed (error_id={error_id}): {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error (error_id={error_id})",
+        )
 
 
 @router.get("/collections")
@@ -177,5 +191,12 @@ async def list_collections() -> dict:
         }
     
     except Exception as e:
-        logger.error(f"Failed to get collection stats: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_id = str(uuid.uuid4())
+        logger.error(
+            f"Failed to get collection stats (error_id={error_id}): {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error (error_id={error_id})",
+        )

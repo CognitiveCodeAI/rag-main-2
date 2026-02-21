@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.acl.dependencies import get_entitlements
 from app.acl.models import Entitlements
 from app.acl.postgres_filter import ACLPostgresFilter
+from app.config import get_settings
 from app.db.session import session_scope
 from app.db.models import EmbeddingJob
 from app.db.graph_models import DocumentGraph, Node
@@ -24,6 +25,14 @@ from app.storage.minio_client import get_storage_client
 from app.tasks.embed_nodes import embed_nodes_task
 
 router = APIRouter(prefix="/v1/embed", tags=["embedding"])
+
+
+def _raise_acl_access_denied(resource_name: str) -> None:
+    """Raise ACL denial with disclosure mode semantics."""
+    settings = get_settings()
+    if settings.acl_disclosure_mode == "opaque":
+        raise HTTPException(status_code=404, detail=f"{resource_name} not found")
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 class EmbedDocumentRequest(BaseModel):
@@ -58,7 +67,10 @@ class EmbedJobStatusResponse(BaseModel):
 
 
 @router.post("/document", response_model=EmbedDocumentResponse)
-async def embed_document(request: EmbedDocumentRequest) -> EmbedDocumentResponse:
+async def embed_document(
+    request: EmbedDocumentRequest,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> EmbedDocumentResponse:
     """Trigger embedding generation for a document.
     
     Queues an async task to generate embeddings for all nodes (chunks, figures, tables)
@@ -95,6 +107,13 @@ async def embed_document(request: EmbedDocumentRequest) -> EmbedDocumentResponse
                 status_code=404,
                 detail=f"Document not found: {actual_doc_id} version {version}. Ingest the document first."
             )
+
+        if entitlements is not None:
+            accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(
+                session, entitlements
+            )
+            if actual_doc_id not in accessible_doc_ids:
+                _raise_acl_access_denied("Document")
 
         node_count = session.query(Node).filter(
             Node.doc_id == actual_doc_id,
@@ -141,7 +160,10 @@ async def embed_document(request: EmbedDocumentRequest) -> EmbedDocumentResponse
 
 
 @router.get("/job/{job_id}", response_model=EmbedJobStatusResponse)
-async def get_embed_job_status(job_id: str) -> EmbedJobStatusResponse:
+async def get_embed_job_status(
+    job_id: str,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> EmbedJobStatusResponse:
     """Get the status of an embedding job.
     
     Args:
@@ -160,6 +182,13 @@ async def get_embed_job_status(job_id: str) -> EmbedJobStatusResponse:
         
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+
+        if entitlements is not None:
+            accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(
+                session, entitlements
+            )
+            if not job.doc_id or job.doc_id not in accessible_doc_ids:
+                _raise_acl_access_denied("Job")
         
         return EmbedJobStatusResponse(
             job_id=str(job.job_id),
@@ -179,11 +208,33 @@ async def get_embed_job_status(job_id: str) -> EmbedJobStatusResponse:
 
 
 @router.get("/document/{doc_id}/{version_id}/status")
-async def get_document_embed_status(doc_id: str, version_id: str) -> dict:
+async def get_document_embed_status(
+    doc_id: str,
+    version_id: str,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> dict:
     """Get embedding status for a document version.
     
     Returns info about whether embeddings exist and are indexed.
     """
+    # ACL check against canonical graph identity when ACL is enabled.
+    if entitlements is not None:
+        with session_scope() as session:
+            resolved = resolve_for_embed(
+                session,
+                requested_doc_id=doc_id,
+                requested_version_id=version_id,
+            )
+            if not resolved:
+                _raise_acl_access_denied("Document")
+            accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(
+                session, entitlements
+            )
+            if resolved.graph_doc_id not in accessible_doc_ids:
+                _raise_acl_access_denied("Document")
+            doc_id = resolved.graph_doc_id
+            version_id = str(resolved.graph_version)
+
     storage = get_storage_client()
     
     # Check if bundle exists

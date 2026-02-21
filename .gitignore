@@ -26,8 +26,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -96,6 +96,11 @@ coverage.xml
 *.py,cover
 .hypothesis/
 
+# Local test corpora (do not redistribute third-party documents)
+backend/tests/docs/*
+!backend/tests/docs/.gitignore
+!backend/tests/docs/README.md
+
 # -----------------------
 # Build Artifacts
 # -----------------------
@@ -130,7 +135,6 @@ temp/
 
 # Large test files (should use fixtures)
 *.pdf
-!backend/tests/docs/*.pdf
 !backend/tests/eval/fixtures/*.pdf
 
 # Test documents (proprietary/client files)

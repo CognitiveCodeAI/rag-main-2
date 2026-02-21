@@ -206,6 +206,14 @@ def _resolve_processing_state(
     return None, None, None
 
 
+def _cache_control_for_doc(doc: DocumentGraph, public_max_age: int) -> str:
+    """Return safe cache-control policy based on document visibility."""
+    visibility = (doc.visibility or "public").lower()
+    if visibility == "public":
+        return f"public, max-age={public_max_age}"
+    return "private, no-store"
+
+
 # ============================================
 # Routes
 # ============================================
@@ -630,8 +638,7 @@ async def get_canonical_document_view(
         content=html_view,
         media_type="text/html",
         headers={
-            "Cache-Control": "public, max-age=300",
-            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": _cache_control_for_doc(doc, public_max_age=300),
         },
     )
 
@@ -776,7 +783,7 @@ async def get_raw_document(
         media_type=content_type,
         headers={
             "Content-Disposition": f'inline; filename="{filename}"',
-            "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+            "Cache-Control": _cache_control_for_doc(doc, public_max_age=3600),
         }
     )
 
