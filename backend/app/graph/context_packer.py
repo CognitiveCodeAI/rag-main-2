@@ -72,13 +72,18 @@ class PackedContext:
         for block in self.blocks:
             if include_citations:
                 citation = block.citation
-                marker = f"[{citation.source_type}"
-                if citation.page_no:
-                    marker += f", p.{citation.page_no}"
+                # Emit canonical citation key first so the model can copy exact
+                # [node_id:page] references into answers.
+                page_no = citation.page_no if citation.page_no is not None else 0
+                marker = f"[{citation.node_id}:{page_no}]"
+
+                # Keep auxiliary metadata outside [] so citation regexes stay simple.
+                meta_parts = [f"source={citation.source_type}"]
                 if citation.label:
-                    marker += f", {citation.label}"
-                marker += "]"
-                parts.append(f"{marker}\n{block.text}")
+                    meta_parts.append(f"label={citation.label}")
+
+                meta_suffix = " ".join(meta_parts)
+                parts.append(f"{marker} {meta_suffix}\n{block.text}")
             else:
                 parts.append(block.text)
         
