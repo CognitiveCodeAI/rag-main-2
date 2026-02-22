@@ -60,6 +60,21 @@ class TestHealthEndpoints:
         assert data.get("status") == "ok"
         assert data.get("service") == "qa"
 
+    @patch("app.db.session.engine.connect")
+    def test_health_service_checks_redact_internal_errors(self, mock_connect):
+        """Service-health diagnostics should not expose raw backend exception text."""
+        mock_connect.side_effect = Exception("postgres://secret-host")
+
+        response = client.get("/health?check_services=true")
+        assert response.status_code == 200
+        data = response.json()
+        postgres = data.get("services", {}).get("postgresql", {})
+        message = postgres.get("message", "")
+
+        assert postgres.get("status") == "unhealthy"
+        assert "error_id=" in message
+        assert "secret-host" not in message
+
 
 # =============================================================================
 # INGEST API TESTS
@@ -666,6 +681,33 @@ class TestSettingsErrorHandling:
         assert "internal server error" in detail.lower()
         assert "error_id=" in detail
         assert "db://secret" not in detail
+
+
+class TestACLRouteHardening:
+    """Ensure ACL policy routes fail closed when ACL is disabled."""
+
+    @patch("app.acl.dependencies.get_settings")
+    def test_acl_policy_get_unavailable_when_acl_disabled(self, mock_get_settings):
+        settings = MagicMock()
+        settings.acl_enabled = False
+        mock_get_settings.return_value = settings
+
+        response = client.get(f"/v1/acl/documents/{uuid.uuid4()}/policy")
+        assert response.status_code == 503
+        assert response.json().get("detail") == "ACL feature is disabled"
+
+    @patch("app.acl.dependencies.get_settings")
+    def test_acl_policy_update_unavailable_when_acl_disabled(self, mock_get_settings):
+        settings = MagicMock()
+        settings.acl_enabled = False
+        mock_get_settings.return_value = settings
+
+        response = client.put(
+            f"/v1/acl/documents/{uuid.uuid4()}/policy",
+            json={"visibility": "public"},
+        )
+        assert response.status_code == 503
+        assert response.json().get("detail") == "ACL feature is disabled"
 
 
 # =============================================================================

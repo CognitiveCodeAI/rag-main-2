@@ -119,6 +119,20 @@ async def health(check_services: bool = Query(default=False, description="Check 
     # Optionally check service connectivity
     if check_services:
         services = {}
+
+        def _service_failure(service_name: str, exc: Exception) -> ServiceStatus:
+            error_id = str(uuid.uuid4())
+            logger.warning(
+                "[Health] %s check failed (error_id=%s): %s",
+                service_name,
+                error_id,
+                exc,
+                exc_info=True,
+            )
+            return ServiceStatus(
+                status="unhealthy",
+                message=f"Service check failed (error_id={error_id})",
+            )
         
         # Check PostgreSQL
         try:
@@ -128,7 +142,7 @@ async def health(check_services: bool = Query(default=False, description="Check 
                 conn.execute(text("SELECT 1"))
             services["postgresql"] = ServiceStatus(status="healthy")
         except Exception as e:
-            services["postgresql"] = ServiceStatus(status="unhealthy", message=str(e))
+            services["postgresql"] = _service_failure("postgresql", e)
             overall_status = "degraded"
         
         # Check Milvus
@@ -140,7 +154,7 @@ async def health(check_services: bool = Query(default=False, description="Check 
             connections.disconnect(alias)
             services["milvus"] = ServiceStatus(status="healthy")
         except Exception as e:
-            services["milvus"] = ServiceStatus(status="unhealthy", message=str(e))
+            services["milvus"] = _service_failure("milvus", e)
             overall_status = "degraded"
         
         # Check MinIO
@@ -155,7 +169,7 @@ async def health(check_services: bool = Query(default=False, description="Check 
             client.list_buckets()
             services["minio"] = ServiceStatus(status="healthy")
         except Exception as e:
-            services["minio"] = ServiceStatus(status="unhealthy", message=str(e))
+            services["minio"] = _service_failure("minio", e)
             overall_status = "degraded"
         
         # Check Redis
@@ -165,7 +179,7 @@ async def health(check_services: bool = Query(default=False, description="Check 
             r.ping()
             services["redis"] = ServiceStatus(status="healthy")
         except Exception as e:
-            services["redis"] = ServiceStatus(status="unhealthy", message=str(e))
+            services["redis"] = _service_failure("redis", e)
             overall_status = "degraded"
 
         # Check Celery workers

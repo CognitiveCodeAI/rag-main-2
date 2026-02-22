@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # App info
     app_name: str = "FDD - Document Intelligence"
     app_version: str = "0.1.0"
-    debug: bool = True
+    debug: bool = False
     vendor_name: str = "Cognitive Code"
     vendor_website: str = "https://cognitiveCode.ai"
     vendor_developer: str = "Larry Stewart"

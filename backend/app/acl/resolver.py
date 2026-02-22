@@ -94,15 +94,12 @@ class EntitlementsResolver:
         """Extract entitlements, raising 401 if missing when ACL is enabled.
 
         Unlike from_request(), this always raises if ACL is on and headers are missing.
+        If ACL is disabled, this dependency is considered unavailable and fails closed.
         """
         if not settings.acl_enabled:
-            # Return a default entitlements for non-ACL mode
-            return Entitlements(
-                tenant_id=settings.acl_default_tenant_id,
-                user_id="anonymous",
-                roles=frozenset(),
-                groups=frozenset(),
-                is_admin=True,  # No ACL = full access
+            raise HTTPException(
+                status_code=503,
+                detail="ACL feature is disabled",
             )
 
         result = cls.from_request(request, settings)

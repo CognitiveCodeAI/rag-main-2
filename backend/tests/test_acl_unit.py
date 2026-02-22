@@ -1,7 +1,11 @@
 """Unit tests for ACL models, enforcer, and postgres filter."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.acl.models import (
     DocumentACL,
@@ -9,6 +13,7 @@ from app.acl.models import (
     NodeACLOverride,
     Visibility,
 )
+from app.acl.resolver import EntitlementsResolver
 
 
 # =============================================================================
@@ -56,6 +61,65 @@ class TestEntitlements:
         e1 = Entitlements(tenant_id="t1", user_id="u1")
         e2 = Entitlements(tenant_id="t2", user_id="u1")
         assert e1.entitlements_hash() != e2.entitlements_hash()
+
+
+class TestEntitlementsResolver:
+    @staticmethod
+    def _request(headers: dict[str, str] | None = None) -> Request:
+        raw_headers = []
+        for key, value in (headers or {}).items():
+            raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/",
+                "headers": raw_headers,
+            }
+        )
+
+    def test_from_request_returns_none_when_acl_disabled(self):
+        settings = SimpleNamespace(acl_enabled=False)
+        request = self._request(
+            {
+                "X-Tenant-Id": "tenant-a",
+                "X-User-Id": "user-a",
+            }
+        )
+
+        assert EntitlementsResolver.from_request(request, settings) is None
+
+    def test_require_fails_closed_when_acl_disabled(self):
+        settings = SimpleNamespace(acl_enabled=False)
+        request = self._request()
+
+        with pytest.raises(HTTPException) as exc_info:
+            EntitlementsResolver.require(request, settings)
+
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == "ACL feature is disabled"
+
+    def test_require_resolves_entitlements_when_acl_enabled(self):
+        settings = SimpleNamespace(
+            acl_enabled=True,
+            acl_strict_mode=True,
+            acl_admin_roles=["admin"],
+        )
+        request = self._request(
+            {
+                "X-Tenant-Id": "tenant-a",
+                "X-User-Id": "user-a",
+                "X-Roles": "admin,analyst",
+                "X-Groups": "finance",
+            }
+        )
+
+        entitlements = EntitlementsResolver.require(request, settings)
+        assert entitlements.tenant_id == "tenant-a"
+        assert entitlements.user_id == "user-a"
+        assert entitlements.is_admin is True
+        assert entitlements.roles == frozenset({"admin", "analyst"})
+        assert entitlements.groups == frozenset({"finance"})
 
 
 # =============================================================================

@@ -186,7 +186,7 @@ Key settings:
 | `OPENAI_API_KEY` | Yes | OpenAI API key for embeddings |
 | `DB_PASSWORD` | Yes | PostgreSQL password |
 | `MINIO_SECRET_KEY` | Yes | MinIO secret key |
-| `DEBUG` | No | Enable debug mode (default: true) |
+| `DEBUG` | No | Enable debug mode (default: false) |
 
 ## Testing
 

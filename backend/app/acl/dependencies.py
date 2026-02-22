@@ -24,7 +24,7 @@ async def require_entitlements(request: Request) -> Entitlements:
     """FastAPI dependency: resolve entitlements, 401 if missing.
 
     Hard dependency — always returns valid Entitlements.
-    When ACL is disabled, returns admin-level defaults.
+    Raises 503 when ACL is disabled.
     """
     settings = get_settings()
     return EntitlementsResolver.require(request, settings)

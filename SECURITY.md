@@ -13,9 +13,10 @@ Security fixes are applied to the latest version on `main`.
 
 Please do not open public issues for security vulnerabilities.
 
-Send a report with the subject line `SECURITY: <short title>` to:
+Use one of these private channels:
 
-- `security@your-domain.example` (replace with your real address before public launch)
+- Open a private GitHub Security Advisory in this repository.
+- If advisories are unavailable, contact the maintainer directly via the email listed on the repository owner profile.
 
 Include:
 
