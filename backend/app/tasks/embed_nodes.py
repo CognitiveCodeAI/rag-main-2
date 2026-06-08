@@ -11,7 +11,7 @@ V2 collections have these fields and are required for metadata-aware retrieval.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -197,9 +197,9 @@ def embed_nodes_task(
                     if error:
                         job.error = error
                     if status == "processing" and not job.started_at:
-                        job.started_at = datetime.utcnow()
+                        job.started_at = datetime.now(timezone.utc)
                     if status in ("completed", "failed", "partial", "skipped_alias"):
-                        job.completed_at = datetime.utcnow()
+                        job.completed_at = datetime.now(timezone.utc)
                     for k, v in extra_fields.items():
                         if hasattr(job, k):
                             setattr(job, k, v)

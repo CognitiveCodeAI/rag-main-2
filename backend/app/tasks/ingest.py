@@ -7,7 +7,7 @@ by the QA system for retrieval and citation.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.worker import celery_app
@@ -78,7 +78,7 @@ def ingest_document_task(
             if job:
                 job.status = "processing"
                 job.pipeline_stage = "retrieving_file"
-                job.started_at = datetime.utcnow()
+                job.started_at = datetime.now(timezone.utc)
 
         logger.info(f"Starting Graph ingestion: job={job_id}, doc={doc_id}")
 
@@ -145,7 +145,7 @@ def ingest_document_task(
             job = session.query(IngestJob).filter_by(job_id=job_uuid).first()
             if job:
                 job.status = "completed"
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.graph_doc_id = actual_doc_id
                 job.graph_version = actual_graph_version
 
@@ -180,7 +180,7 @@ def ingest_document_task(
                 if job:
                     job.status = "failed"
                     job.error = str(e)
-                    job.completed_at = datetime.utcnow()
+                    job.completed_at = datetime.now(timezone.utc)
         except Exception:
             pass
         

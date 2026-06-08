@@ -17,7 +17,7 @@ Bucket layout:
 import io
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from minio import Minio
@@ -441,7 +441,7 @@ class StorageClient:
         Returns:
             S3 URI of stored object
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         object_name = f"{now.year}/{now.month:02d}/{now.day:02d}/{trace_id}.json"
         content = json.dumps(trace, indent=2, ensure_ascii=False).encode("utf-8")
         
