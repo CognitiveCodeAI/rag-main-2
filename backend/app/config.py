@@ -25,10 +25,15 @@ class Settings(BaseSettings):
     vendor_website: str = "https://cognitiveCode.ai"
     vendor_developer: str = "Larry Stewart"
     
+    # Deployment profile: "development" (default) or "production".
+    # In production the app refuses to start with insecure defaults
+    # (ACL disabled, built-in credentials) — see validate_production_security().
+    environment: str = "development"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
-    
+
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     
@@ -145,9 +150,14 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
         extra = "ignore"  # Ignore any extra environment variables
     
+    @property
+    def is_production(self) -> bool:
+        """True when running under the production deployment profile."""
+        return self.environment.strip().lower() in ("production", "prod")
+
     def validate_required_for_embeddings(self) -> list[str]:
         """Check if required settings for embeddings are configured.
-        
+
         Returns:
             List of missing required settings (empty if all configured)
         """
@@ -155,10 +165,32 @@ class Settings(BaseSettings):
         if not self.openai_api_key:
             missing.append("OPENAI_API_KEY")
         return missing
+
+    def validate_production_security(self) -> list[str]:
+        """Return production security violations (empty list if safe).
+
+        Only meaningful when ``is_production`` is True. Closes the two
+        fail-open defaults flagged in the audit: ACL disabled (C-1/H-1)
+        and weak built-in credentials (M-1). The caller refuses to start
+        the app if this returns a non-empty list in production.
+        """
+        problems: list[str] = []
+        if not self.acl_enabled:
+            problems.append(
+                "ACL_ENABLED is false — authorization is bypassed. Set ACL_ENABLED=true."
+            )
+        if self.db_password in ("", "ragpass"):
+            problems.append("DB_PASSWORD is empty or the insecure default 'ragpass'.")
+        if self.minio_access_key in ("", "minioadmin"):
+            problems.append("MINIO_ACCESS_KEY is empty or the insecure default 'minioadmin'.")
+        if self.minio_secret_key in ("", "minioadmin"):
+            problems.append("MINIO_SECRET_KEY is empty or the insecure default 'minioadmin'.")
+        return problems
     
     def log_configuration_summary(self) -> None:
         """Log a summary of the current configuration for debugging."""
         logger.info("=== Configuration Summary ===")
+        logger.info(f"  Environment: {self.environment}")
         logger.info(f"  Database: {self.db_user}@{self.db_host}:{self.db_port}/{self.db_name}")
         logger.info(f"  Milvus: {self.milvus_host}:{self.milvus_port}")
         logger.info(f"  MinIO: {self.minio_endpoint}")
