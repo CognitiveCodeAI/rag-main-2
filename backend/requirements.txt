@@ -69,7 +69,7 @@ markdown==3.7
 tiktoken==0.8.0
 
 # Embeddings
-openai==2.15.0
+openai==2.41.0
 
 # JWT/OIDC authentication (C2/C3); [crypto] pulls cryptography for RS/ES verification
 PyJWT[crypto]==2.10.1
