@@ -7,4 +7,4 @@ pytest==9.0.3
 pytest-asyncio==1.4.0
 
 # Static type checking (baseline; wired into CI as a non-blocking check first)
-mypy==1.13.0
+mypy==2.1.0
