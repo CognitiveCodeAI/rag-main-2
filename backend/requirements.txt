@@ -4,7 +4,7 @@
 
 # Build/runtime shim: pymilvus 2.4.9 imports pkg_resources, which setuptools>=81 removed.
 # Pin below 81 so a fresh venv (esp. Python 3.12+, which omits setuptools by default) keeps pkg_resources.
-setuptools<81
+setuptools<83
 
 # FastAPI and server
 fastapi==0.115.6
