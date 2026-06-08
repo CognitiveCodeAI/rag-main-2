@@ -82,6 +82,9 @@ class IngestJob(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Updated by the worker as the job progresses; used by the stale-job
+    # sweeper to fail jobs whose worker died (D3 / audit H-6).
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     document = relationship("Document", back_populates="ingest_jobs")
@@ -236,7 +239,8 @@ class EmbeddingJob(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+
     def __repr__(self) -> str:
         return f"<EmbeddingJob(job_id={self.job_id}, status={self.status})>"
 

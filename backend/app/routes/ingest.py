@@ -23,6 +23,7 @@ from app.db.session import session_scope
 from app.graph.backend_selector import get_supported_types
 from app.metadata.extractor import MetadataExtractor
 from app.services.worker_health import inspect_celery_workers
+from app.services.job_sweeper import sweep_stale_jobs
 from app.storage.minio_client import get_storage_client
 from app.tasks.ingest import ingest_document_task
 
@@ -992,8 +993,12 @@ async def list_ingest_jobs(
     """
     if limit > 100:
         limit = 100
-    
+
     with session_scope() as session:
+        # Lazily fail jobs whose worker died with no recent heartbeat (D3),
+        # so the list never shows a permanently "processing" ghost job.
+        sweep_stale_jobs(session)
+
         query = session.query(IngestJob)
 
         accessible_doc_ids = ACLPostgresFilter.get_accessible_doc_ids(session, entitlements)
