@@ -39,6 +39,8 @@ from app.services.highlighting import (
     verify_evidence_span,
 )
 from app.storage.minio_client import get_storage_client
+from app.qa import metadata_queries
+from app.qa import structured_targets
 from .evidence_span import build_evidence_spans
 from .normalizer import normalize_query, NormalizedQuery
 from .section_booster import SectionBooster, SectionBoostResult
@@ -53,150 +55,15 @@ logger = logging.getLogger(__name__)
 # RERANKER GATE - Metric-based eligibility for reranking
 # =============================================================================
 
-@dataclass
-class RerankerGateContext:
-    """Context for reranker gate decision."""
-    # Baseline metrics (from recent evals)
-    baseline_seed_precision_at_5: float = 0.0
-    baseline_evidence_recall: float = 0.0
-    
-    # A/B comparison metrics
-    rerank_seed_precision_at_5: float = 0.0
-    rerank_evidence_recall: float = 0.0
-    rerank_ab_improvement_at_5: float = 0.0
-    
-    # Performance metrics
-    rerank_latency_overhead_pct: float = 0.0
-    rerank_degeneracy_rate: float = 0.0  # % of questions with degenerate output
-    
-    # Baseline improvement trend (from N eval runs)
-    baseline_precision_trend: float = 0.0  # Change in precision over recent runs
-
-
-@dataclass
-class RerankerGateResult:
-    """Result of reranker gate evaluation."""
-    allowed: bool = False
-    reason: str = ""
-    mode: str = "baseline"  # "baseline" | "gated" | "forced"
-    
-    # Individual gate checks
-    baseline_plateau_check: bool = False
-    ab_improvement_check: bool = False
-    recall_regression_check: bool = False
-    latency_check: bool = False
-    stability_check: bool = False
-
-
-class RerankerGate:
-    """Metric-gated reranking eligibility checker.
-    
-    Reranking only runs when ALL conditions are met:
-    1. Baseline plateau (precision improvement < +0.02)
-    2. A/B improvement (rerank improves precision by ≥ +0.05)
-    3. No recall regression
-    4. Latency overhead ≤ 20%
-    5. Stability (degeneracy rate ≤ 10%)
-    """
-    
-    # Gate thresholds (from directive)
-    BASELINE_PLATEAU_THRESHOLD = 0.02     # Max precision improvement before plateau
-    AB_IMPROVEMENT_THRESHOLD = 0.05       # Min required rerank improvement
-    LATENCY_OVERHEAD_MAX_PCT = 20.0       # Max latency overhead %
-    DEGENERACY_RATE_MAX_PCT = 10.0        # Max degeneracy/fallback rate %
-    
-    # Fast mode limits (when gate passes)
-    FAST_MODE_MAX_CANDIDATES = 12
-    FAST_MODE_TIMEOUT_S = 2
-    
-    @classmethod
-    def should_rerank(
-        cls,
-        context: Optional[RerankerGateContext] = None,
-        force: bool = False
-    ) -> RerankerGateResult:
-        """Determine if reranking should run.
-        
-        Args:
-            context: Gate context with metrics (None = use defaults/deny)
-            force: Manual override via --rerank-force flag
-            
-        Returns:
-            RerankerGateResult with decision and reasoning
-        """
-        result = RerankerGateResult()
-        
-        # Manual override
-        if force:
-            result.allowed = True
-            result.mode = "forced"
-            result.reason = "forced_by_flag"
-            logger.warning("[RerankerGate] Reranking FORCED via --rerank-force flag")
-            return result
-        
-        # No context = no metrics = deny
-        if context is None:
-            result.allowed = False
-            result.mode = "baseline"
-            result.reason = "no_gate_context"
-            logger.info("[RerankerGate] Reranking DENIED: no gate context provided")
-            return result
-        
-        # Check all gate conditions
-        failures = []
-        
-        # 1. Baseline plateau check
-        # Baseline is still improving if trend >= threshold
-        if context.baseline_precision_trend >= cls.BASELINE_PLATEAU_THRESHOLD:
-            failures.append(f"baseline_still_improving({context.baseline_precision_trend:.3f}>={cls.BASELINE_PLATEAU_THRESHOLD})")
-        else:
-            result.baseline_plateau_check = True
-        
-        # 2. A/B improvement check
-        if context.rerank_ab_improvement_at_5 < cls.AB_IMPROVEMENT_THRESHOLD:
-            failures.append(f"ab_improvement_too_low({context.rerank_ab_improvement_at_5:.3f}<{cls.AB_IMPROVEMENT_THRESHOLD})")
-        else:
-            result.ab_improvement_check = True
-        
-        # 3. No recall regression
-        if context.rerank_evidence_recall < context.baseline_evidence_recall:
-            failures.append(f"recall_regression({context.rerank_evidence_recall:.2f}<{context.baseline_evidence_recall:.2f})")
-        else:
-            result.recall_regression_check = True
-        
-        # 4. Latency overhead check
-        if context.rerank_latency_overhead_pct > cls.LATENCY_OVERHEAD_MAX_PCT:
-            failures.append(f"latency_too_high({context.rerank_latency_overhead_pct:.1f}%>{cls.LATENCY_OVERHEAD_MAX_PCT}%)")
-        else:
-            result.latency_check = True
-        
-        # 5. Stability check
-        if context.rerank_degeneracy_rate > cls.DEGENERACY_RATE_MAX_PCT:
-            failures.append(f"degeneracy_too_high({context.rerank_degeneracy_rate:.1f}%>{cls.DEGENERACY_RATE_MAX_PCT}%)")
-        else:
-            result.stability_check = True
-        
-        # All checks must pass
-        if failures:
-            result.allowed = False
-            result.mode = "baseline"
-            result.reason = "; ".join(failures)
-            logger.info(f"[RerankerGate] Reranking DENIED: {result.reason}")
-        else:
-            result.allowed = True
-            result.mode = "gated"
-            result.reason = "all_gates_passed"
-            logger.info("[RerankerGate] Reranking ALLOWED: all gate conditions met")
-        
-        return result
-    
-    @classmethod
-    def get_fast_mode_config(cls) -> Dict[str, Any]:
-        """Get fast mode configuration when gate passes."""
-        return {
-            "max_candidates": cls.FAST_MODE_MAX_CANDIDATES,
-            "timeout_s": cls.FAST_MODE_TIMEOUT_S,
-        }
+# RerankerGate and its context/result dataclasses live in app/qa/reranker_gate.py
+# (E2 extraction). Re-exported here so existing imports keep working, e.g.
+# `from app.qa.runner import RerankerGate, RerankerGateContext` (used by
+# app/qa/gate_metrics.py) and the bare RerankerGate.should_rerank() call in run().
+from app.qa.reranker_gate import (  # noqa: E402
+    RerankerGate,
+    RerankerGateContext,
+    RerankerGateResult,
+)
 
 
 @dataclass
@@ -1964,67 +1831,16 @@ Return JSON only in the following format:
         return rerank_map
     
     def _get_doc_total_pages(self, doc_id: str) -> int:
-        """Get total pages for a document.
-        
-        Args:
-            doc_id: Document ID
-            
-        Returns:
-            Total pages (0 if unknown)
-        """
-        from app.db.graph_models import DocumentGraph
-        doc = self.db.query(DocumentGraph).filter(
-            DocumentGraph.doc_id == doc_id
-        ).first()
-        
-        if doc and doc.meta:
-            return doc.meta.get("total_pages", 0)
-        return 0
-    
+        """Total pages for a document (delegates to metadata_queries)."""
+        return metadata_queries.get_doc_total_pages(self.db, doc_id)
+
     def _get_doc_collection_version(self, doc_id: Optional[str]) -> Optional[str]:
-        """Get the Milvus collection version used when document was embedded.
-        
-        This enables querying the correct collection (v1 or v2) based on
-        where the document's vectors were actually stored.
-        
-        Args:
-            doc_id: Document ID (None means search all documents)
-            
-        Returns:
-            Collection version ("v1" or "v2") or None if unknown/all docs
-        """
-        if not doc_id:
-            # Searching all documents - use default collection (v2)
-            return None
-            
-        from app.db.graph_models import DocumentGraph
-        doc = self.db.query(DocumentGraph).filter(
-            DocumentGraph.doc_id == doc_id
-        ).first()
-        
-        if doc and doc.embedded_collection_version:
-            return doc.embedded_collection_version
-        return None
-    
+        """Milvus collection version a doc was embedded into (delegates)."""
+        return metadata_queries.get_doc_collection_version(self.db, doc_id)
+
     def _get_nodes_metadata(self, node_ids: List[str]) -> Dict[str, Dict]:
-        """Get metadata for nodes.
-        
-        Args:
-            node_ids: List of node IDs
-            
-        Returns:
-            Dict of node_id -> meta dict
-        """
-        from app.db.graph_models import Node as NodeModel
-        
-        if not node_ids:
-            return {}
-        
-        nodes = self.db.query(NodeModel).filter(
-            NodeModel.node_id.in_(node_ids)
-        ).all()
-        
-        return {n.node_id: n.meta or {} for n in nodes}
+        """Metadata for nodes as {node_id -> meta} (delegates)."""
+        return metadata_queries.get_nodes_metadata(self.db, node_ids)
     
     # ==========================================================================
     # STRUCTURED-OBJECT SEED INJECTION (deterministic, no LLM)
@@ -2033,54 +1849,16 @@ Return JSON only in the following format:
     # Max injected seeds to force into top-K
     MAX_INJECTED_SEEDS = 2
     
-    # Regex patterns for structured object mentions
-    FIGURE_PATTERN = re.compile(r'(?:Figure|Fig\.?)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
-    TABLE_PATTERN = re.compile(r'(?:Table|Tab\.?)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
-    APPENDIX_PATTERN = re.compile(r'Appendix\s*([A-Za-z])', re.IGNORECASE)
-    SECTION_PATTERN = re.compile(
-        r'\b(Conclusion|Methodology|Introduction|Discussion|Evaluation|Results|Appendix)\b',
-        re.IGNORECASE
-    )
-    
+    # Patterns + detection live in app/qa/structured_targets.py (E2 extraction);
+    # aliased here for back-compat with any external references.
+    FIGURE_PATTERN = structured_targets.FIGURE_PATTERN
+    TABLE_PATTERN = structured_targets.TABLE_PATTERN
+    APPENDIX_PATTERN = structured_targets.APPENDIX_PATTERN
+    SECTION_PATTERN = structured_targets.SECTION_PATTERN
+
     def _detect_structured_targets(self, question: str) -> Dict[str, List[str]]:
-        """Detect Figure/Table/Appendix/Section mentions in question.
-        
-        Args:
-            question: User question text
-            
-        Returns:
-            Dict with keys 'figures', 'tables', 'appendices', 'sections'
-            containing normalized target strings
-        """
-        targets = {
-            "figures": [],
-            "tables": [],
-            "appendices": [],
-            "sections": []
-        }
-        
-        # Detect Figure X
-        for match in self.FIGURE_PATTERN.finditer(question):
-            num = match.group(1)
-            targets["figures"].append(f"Figure {num}")
-        
-        # Detect Table X
-        for match in self.TABLE_PATTERN.finditer(question):
-            num = match.group(1)
-            targets["tables"].append(f"Table {num}")
-        
-        # Detect Appendix X
-        for match in self.APPENDIX_PATTERN.finditer(question):
-            letter = match.group(1).upper()
-            targets["appendices"].append(f"Appendix {letter}")
-        
-        # Detect section mentions
-        for match in self.SECTION_PATTERN.finditer(question):
-            section = match.group(1).title()  # "conclusion" -> "Conclusion"
-            if section not in targets["sections"]:
-                targets["sections"].append(section)
-        
-        return targets
+        """Detect Figure/Table/Appendix/Section mentions (delegates)."""
+        return structured_targets.detect_structured_targets(question)
     
     def _query_nodes_by_label(
         self,
