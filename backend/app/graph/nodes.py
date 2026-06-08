@@ -7,10 +7,12 @@ Creates Node objects for:
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
 import fitz  # PyMuPDF
 
+from app.config import get_settings
 from app.db.graph_models import Node, NodeType
 from app.ocr import get_ocr_client, OCRClient
 from .ids import compute_node_id, compute_text_hash
@@ -118,48 +120,109 @@ def create_figure_nodes(
     page_extractor = PageExtractor()
     
     nodes: List[Node] = []
-    
+
+    settings = get_settings()
+    max_concurrency = max(1, settings.ocr_max_concurrency)
+    max_calls = settings.ocr_max_calls_per_doc  # 0 == unlimited
+
     # Open PDF
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    
+
     try:
-        # Group figures by page for efficient processing
+        # Group figures by page (insertion order preserves document order).
         figures_by_page = {}
         for fig in figures:
-            if fig.page_no not in figures_by_page:
-                figures_by_page[fig.page_no] = []
-            figures_by_page[fig.page_no].append(fig)
-        
-        # Process each page
+            figures_by_page.setdefault(fig.page_no, []).append(fig)
+
+        # --- Phase A (single-threaded): render region images in document order.
+        # PyMuPDF pages are NOT thread-safe, so all fitz access stays here; the
+        # per-doc spend cap is applied deterministically to the first N figures.
+        work = []  # ordered: {"fig", "fig_index", "image_bytes"}
+        ocr_calls_planned = 0
+        over_cap = 0
         for page_no, page_figures in figures_by_page.items():
-            page_idx = page_no - 1  # 0-indexed
-            
-            if page_idx < 0 or page_idx >= len(doc):
+            page_idx = page_no - 1
+            page = None
+            if 0 <= page_idx < len(doc):
+                page = doc[page_idx]
+            else:
                 logger.warning(f"Page {page_no} out of range for doc {doc_id}")
-                continue
-            
-            page = doc[page_idx]
-            
             for fig_idx, fig in enumerate(page_figures):
-                node = _create_single_figure_node(
-                    fig=fig,
-                    page=page,
-                    fig_index=fig_idx,
-                    doc_id=doc_id,
-                    version=version,
-                    page_extractor=page_extractor,
-                    ocr_client=ocr_client,
-                    skip_ocr=skip_ocr
-                )
-                
-                if node:
-                    nodes.append(node)
-                    
+                image_bytes = None
+                needs_ocr = bool(fig.bbox and not skip_ocr and ocr_client and page is not None)
+                if needs_ocr and max_calls and ocr_calls_planned >= max_calls:
+                    over_cap += 1  # beyond the spend cap -> no OCR (empty text)
+                    needs_ocr = False
+                if needs_ocr:
+                    try:
+                        image_bytes = page_extractor.render_region_image(
+                            page=page, bbox=fig.bbox, zoom=2.0,
+                        )
+                        ocr_calls_planned += 1
+                    except Exception as e:
+                        logger.warning(f"Region render failed for {fig.label or 'figure'}: {e}")
+                        image_bytes = None
+                work.append({"fig": fig, "fig_index": fig_idx, "image_bytes": image_bytes})
+
+        # --- Phase B (bounded concurrency): OCR the rendered regions. ocr_region
+        # is a stateless, thread-safe HTTP call.
+        ocr_text_by_item = {}  # id(work_item) -> ocr_text
+
+        def _ocr(item):
+            fig = item["fig"]
+            return ocr_client.ocr_region(
+                image_bytes=item["image_bytes"],
+                doc_id=doc_id,
+                page_no=fig.page_no,
+                region_type=fig.figure_type,
+            )
+
+        ocr_items = [w for w in work if w["image_bytes"] is not None]
+        if ocr_items:
+            workers = min(max_concurrency, len(ocr_items))
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = {pool.submit(_ocr, w): w for w in ocr_items}
+                    for fut in as_completed(futures):
+                        w = futures[fut]
+                        try:
+                            ocr_text_by_item[id(w)] = fut.result() or ""
+                        except Exception as e:
+                            logger.warning(f"OCR failed for {w['fig'].label or 'figure'}: {e}")
+                            ocr_text_by_item[id(w)] = ""
+            else:
+                for w in ocr_items:
+                    try:
+                        ocr_text_by_item[id(w)] = _ocr(w) or ""
+                    except Exception as e:
+                        logger.warning(f"OCR failed for {w['fig'].label or 'figure'}: {e}")
+                        ocr_text_by_item[id(w)] = ""
+
+        # --- Phase C (single-threaded, document order): build nodes.
+        for w in work:
+            node = _build_figure_node(
+                fig=w["fig"],
+                fig_index=w["fig_index"],
+                doc_id=doc_id,
+                version=version,
+                ocr_text=ocr_text_by_item.get(id(w), ""),
+            )
+            if node:
+                nodes.append(node)
+
     finally:
         doc.close()
-    
-    logger.info(f"Created {len(nodes)} figure/table nodes for doc {doc_id} v{version}")
-    
+
+    if over_cap:
+        logger.warning(
+            "OCR spend cap (%d) reached for doc %s; %d figure(s) left un-OCR'd",
+            max_calls, doc_id, over_cap,
+        )
+    logger.info(
+        "Created %d figure/table nodes for doc %s v%d (%d OCR calls, concurrency<=%d)",
+        len(nodes), doc_id, version, ocr_calls_planned, max_concurrency,
+    )
+
     return nodes
 
 
@@ -250,28 +313,25 @@ def create_figure_nodes_from_data(
     return nodes
 
 
-def _create_single_figure_node(
+def _build_figure_node(
     fig: FigureData,
-    page: fitz.Page,
     fig_index: int,
     doc_id: str,
     version: int,
-    page_extractor: PageExtractor,
-    ocr_client: Optional[OCRClient],
-    skip_ocr: bool = False
+    ocr_text: str = "",
 ) -> Optional[Node]:
-    """Create a single figure/table node.
-    
+    """Build a single figure/table node from pre-computed OCR text.
+
+    OCR (and the fitz rendering it needs) is performed by create_figure_nodes
+    before this is called, so this is pure, fitz-free, and thread-safe to build.
+
     Args:
         fig: FigureData
-        page: PyMuPDF page object
         fig_index: Index of figure on this page
         doc_id: Document ID
         version: Document version
-        page_extractor: PageExtractor for image rendering
-        ocr_client: OCR client (can be None if skip_ocr=True)
-        skip_ocr: If True, skip OCR for this figure
-        
+        ocr_text: OCR result for this region ("" if none/skipped/failed)
+
     Returns:
         Node object or None if creation fails
     """
@@ -297,32 +357,7 @@ def _create_single_figure_node(
             node_type=fig.figure_type
         )
         
-        # OCR the region if bbox available and OCR not skipped
-        ocr_text = ""
-        if fig.bbox and not skip_ocr and ocr_client:
-            try:
-                # Crop and render region
-                image_bytes = page_extractor.render_region_image(
-                    page=page,
-                    bbox=fig.bbox,
-                    zoom=2.0
-                )
-                
-                # Run OCR
-                ocr_text = ocr_client.ocr_region(
-                    image_bytes=image_bytes,
-                    doc_id=doc_id,
-                    page_no=fig.page_no,
-                    region_type=fig.figure_type
-                )
-            except Exception as e:
-                logger.warning(f"OCR failed for {fig.label or 'unknown'}: {e}")
-        elif skip_ocr:
-            logger.debug(f"OCR skipped for {fig.label or 'figure'}")
-        elif not fig.bbox:
-            logger.debug(f"No bbox for {fig.label or 'figure'}, skipping OCR")
-        
-        # Build text_md: label + caption + OCR
+        # Build text_md: label + caption + OCR (ocr_text is pre-computed)
         text_parts = []
         if fig.label:
             text_parts.append(f"**{fig.label}**")
