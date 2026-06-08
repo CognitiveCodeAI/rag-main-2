@@ -40,6 +40,7 @@ from app.services.highlighting import (
 )
 from app.storage.minio_client import get_storage_client
 from app.qa import metadata_queries
+from app.qa import structured_targets
 from .evidence_span import build_evidence_spans
 from .normalizer import normalize_query, NormalizedQuery
 from .section_booster import SectionBooster, SectionBoostResult
@@ -1848,54 +1849,16 @@ Return JSON only in the following format:
     # Max injected seeds to force into top-K
     MAX_INJECTED_SEEDS = 2
     
-    # Regex patterns for structured object mentions
-    FIGURE_PATTERN = re.compile(r'(?:Figure|Fig\.?)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
-    TABLE_PATTERN = re.compile(r'(?:Table|Tab\.?)\s*(\d+(?:\.\d+)?)', re.IGNORECASE)
-    APPENDIX_PATTERN = re.compile(r'Appendix\s*([A-Za-z])', re.IGNORECASE)
-    SECTION_PATTERN = re.compile(
-        r'\b(Conclusion|Methodology|Introduction|Discussion|Evaluation|Results|Appendix)\b',
-        re.IGNORECASE
-    )
-    
+    # Patterns + detection live in app/qa/structured_targets.py (E2 extraction);
+    # aliased here for back-compat with any external references.
+    FIGURE_PATTERN = structured_targets.FIGURE_PATTERN
+    TABLE_PATTERN = structured_targets.TABLE_PATTERN
+    APPENDIX_PATTERN = structured_targets.APPENDIX_PATTERN
+    SECTION_PATTERN = structured_targets.SECTION_PATTERN
+
     def _detect_structured_targets(self, question: str) -> Dict[str, List[str]]:
-        """Detect Figure/Table/Appendix/Section mentions in question.
-        
-        Args:
-            question: User question text
-            
-        Returns:
-            Dict with keys 'figures', 'tables', 'appendices', 'sections'
-            containing normalized target strings
-        """
-        targets = {
-            "figures": [],
-            "tables": [],
-            "appendices": [],
-            "sections": []
-        }
-        
-        # Detect Figure X
-        for match in self.FIGURE_PATTERN.finditer(question):
-            num = match.group(1)
-            targets["figures"].append(f"Figure {num}")
-        
-        # Detect Table X
-        for match in self.TABLE_PATTERN.finditer(question):
-            num = match.group(1)
-            targets["tables"].append(f"Table {num}")
-        
-        # Detect Appendix X
-        for match in self.APPENDIX_PATTERN.finditer(question):
-            letter = match.group(1).upper()
-            targets["appendices"].append(f"Appendix {letter}")
-        
-        # Detect section mentions
-        for match in self.SECTION_PATTERN.finditer(question):
-            section = match.group(1).title()  # "conclusion" -> "Conclusion"
-            if section not in targets["sections"]:
-                targets["sections"].append(section)
-        
-        return targets
+        """Detect Figure/Table/Appendix/Section mentions (delegates)."""
+        return structured_targets.detect_structured_targets(question)
     
     def _query_nodes_by_label(
         self,
