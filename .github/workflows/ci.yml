@@ -49,6 +49,23 @@ jobs:
     name: Backend Integration (security gate)
     runs-on: ubuntu-latest
 
+    # Pin the connection config to the docker-compose defaults so the job does
+    # not depend on a backend/.env (absent in CI) or any ambient runner env.
+    env:
+      ENVIRONMENT: development
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: ragdb
+      DB_USER: raguser
+      DB_PASSWORD: ragpass
+      MILVUS_HOST: localhost
+      MILVUS_PORT: "19530"
+      MINIO_ENDPOINT: localhost:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      REDIS_URL: redis://localhost:6379/0
+      REDIS_BACKEND: redis://localhost:6379/1
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
