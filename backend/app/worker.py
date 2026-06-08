@@ -1,8 +1,10 @@
 """Celery worker configuration for NPR RAG."""
 
 from celery import Celery
+from celery.signals import after_setup_logger, task_prerun
 
 from app.config import get_settings
+from app.observability.request_id import bind_request_id, install_request_id_logging
 
 settings = get_settings()
 
@@ -36,3 +38,23 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=None,
 )
+
+
+@after_setup_logger.connect
+def _install_worker_request_id_logging(**_):
+    """Inject the request id into worker log lines (E4)."""
+    install_request_id_logging()
+
+
+@task_prerun.connect
+def _bind_task_request_id(task=None, **_):
+    """Re-bind the correlation id propagated from the enqueuing request (E4).
+
+    Falls back to a fresh id when a task was enqueued without one.
+    """
+    headers = {}
+    try:
+        headers = getattr(task.request, "headers", None) or {}
+    except Exception:  # pragma: no cover - defensive
+        headers = {}
+    bind_request_id(headers.get("request_id", ""))

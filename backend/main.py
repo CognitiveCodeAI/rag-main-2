@@ -14,6 +14,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.graph.backend_selector import get_supported_types
 from app.models import HealthResponse, ServiceStatus
+from app.observability.request_id import (
+    REQUEST_ID_HEADER,
+    bind_request_id,
+    install_request_id_logging,
+)
 from app.routes import ingest, embed, retrieve, qa, documents, prompts, acl
 from app.routes import settings as settings_routes
 from app.services.worker_health import inspect_celery_workers
@@ -26,6 +31,7 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
+    install_request_id_logging()  # add request-id to log lines (E4)
     logger.info(
         "%s v%s | %s | %s",
         settings.app_name,
@@ -82,8 +88,18 @@ app.add_middleware(
         "X-User-Id",
         "X-Roles",
         "X-Groups",
+        REQUEST_ID_HEADER,
     ],
 )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Bind a correlation id for the request and echo it on the response (E4)."""
+    request_id = bind_request_id(request.headers.get(REQUEST_ID_HEADER, ""))
+    response = await call_next(request)
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 # Include routers
 app.include_router(ingest.router)

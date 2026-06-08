@@ -22,6 +22,7 @@ from app.db.graph_models import DocumentGraph, Node
 from app.services.document_identity import resolve_for_embed
 from app.services.embedding_reconciler import find_unembedded_docs, reconcile_unembedded
 from app.services.worker_health import inspect_celery_workers
+from app.observability.tasking import enqueue
 from app.storage.minio_client import get_storage_client
 from app.tasks.embed_nodes import embed_nodes_task
 
@@ -150,7 +151,7 @@ async def embed_document(
         job_id = str(job.job_id)
     
     # Queue Graph embedding task with actual graph doc_id
-    embed_nodes_task.delay(actual_doc_id, version, job_id=job_id)
+    enqueue(embed_nodes_task, actual_doc_id, version, job_id=job_id)
     
     return EmbedDocumentResponse(
         job_id=job_id,
@@ -391,6 +392,6 @@ async def reconcile_embeddings(
     with session_scope() as session:
         return reconcile_unembedded(
             session,
-            enqueue=lambda doc_id, version: embed_nodes_task.delay(doc_id, version),
+            enqueue=lambda doc_id, version: enqueue(embed_nodes_task, doc_id, version),
             limit=max(1, min(limit, 200)),
         )

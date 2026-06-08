@@ -211,7 +211,7 @@ class TestIngestSuccess:
 
         mock_require_embedding.return_value = None
         mock_storage.return_value = MagicMock()
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         mock_fitz_open.return_value.__enter__.return_value = MagicMock()
         mock_worker_status.return_value = CeleryWorkerStatus(
             healthy=True,
@@ -234,7 +234,7 @@ class TestIngestSuccess:
         assert data["status"] == "pending"
         
         # Verify task was queued
-        mock_task.delay.assert_called_once()
+        mock_task.apply_async.assert_called_once()
     
     @patch("app.routes.ingest.fitz.open")
     @patch("app.routes.ingest.inspect_celery_workers")
@@ -254,7 +254,7 @@ class TestIngestSuccess:
 
         mock_require_embedding.return_value = None
         mock_storage.return_value = MagicMock()
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         mock_fitz_open.return_value.__enter__.return_value = MagicMock()
         mock_worker_status.return_value = CeleryWorkerStatus(
             healthy=True,
@@ -334,7 +334,7 @@ class TestIngestSuccess:
         storage_client = MagicMock()
         storage_client.get_raw.return_value = b"%PDF-1.4 staged content"
         mock_storage.return_value = storage_client
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         mock_worker_status.return_value = CeleryWorkerStatus(
             healthy=True,
             worker_count=1,
@@ -382,9 +382,11 @@ class TestIngestSuccess:
         assert data["status"] == "pending"
         assert "job_id" in data
 
-        mock_task.delay.assert_called_once()
-        _, kwargs = mock_task.delay.call_args
-        assert kwargs["metadata_overrides"] == {"department": "engineering"}
+        mock_task.apply_async.assert_called_once()
+        _, call_kwargs = mock_task.apply_async.call_args
+        # enqueue() forwards task kwargs under apply_async(kwargs=...)
+        task_kwargs = call_kwargs["kwargs"]
+        assert task_kwargs["metadata_overrides"] == {"department": "engineering"}
 
 
 # =============================================================================
