@@ -20,6 +20,7 @@ from app.db.session import session_scope
 from app.db.models import EmbeddingJob
 from app.db.graph_models import DocumentGraph, Node
 from app.services.document_identity import resolve_for_embed
+from app.services.embedding_reconciler import find_unembedded_docs, reconcile_unembedded
 from app.services.worker_health import inspect_celery_workers
 from app.storage.minio_client import get_storage_client
 from app.tasks.embed_nodes import embed_nodes_task
@@ -359,4 +360,37 @@ async def list_embed_jobs(
             page=page,
             limit=limit,
             has_more=offset + len(jobs) < total,
+        )
+
+
+@router.get("/reconcile")
+async def list_unembedded_documents(
+    limit: int = 100,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> dict:
+    """List canonical documents that have nodes but were never embedded (D4).
+
+    These are ingested-but-not-queryable docs (no Milvus vectors).
+    """
+    with session_scope() as session:
+        docs = find_unembedded_docs(session, limit=max(1, min(limit, 500)))
+        return {
+            "count": len(docs),
+            "unembedded": [{"doc_id": d.doc_id, "version": d.version} for d in docs],
+        }
+
+
+@router.post("/reconcile")
+async def reconcile_embeddings(
+    limit: int = 50,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> dict:
+    """Re-enqueue embedding for un-embedded documents (admin only; D4)."""
+    if entitlements is not None and not entitlements.is_admin:
+        raise HTTPException(status_code=403, detail="Admin role required")
+    with session_scope() as session:
+        return reconcile_unembedded(
+            session,
+            enqueue=lambda doc_id, version: embed_nodes_task.delay(doc_id, version),
+            limit=max(1, min(limit, 200)),
         )
