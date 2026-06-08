@@ -181,6 +181,25 @@ def _infer_media_type(filename: str, explicit_content_type: Optional[str]) -> st
     return guessed or "application/octet-stream"
 
 
+def _resolve_sandboxed_local_path(source_uri: str, allowed_root: str) -> Optional[str]:
+    """Resolve a ``file://`` source_uri to a real path inside ``allowed_root``.
+
+    Returns the canonical path only when local reads are enabled (non-empty
+    root), the path does not escape the root (traversal), and the file exists.
+    Returns ``None`` otherwise. (C4 / audit H-8)
+    """
+    if not source_uri.startswith("file://") or not allowed_root:
+        return None
+    candidate = source_uri[len("file://"):]
+    real_path = os.path.realpath(candidate)
+    real_root = os.path.realpath(allowed_root)
+    if real_path != real_root and not real_path.startswith(real_root + os.sep):
+        return None
+    if not os.path.exists(real_path):
+        return None
+    return real_path
+
+
 def _resolve_processing_state(
     ingest_job: Optional[IngestJob],
     embed_job: Optional[EmbeddingJob],
@@ -701,16 +720,24 @@ async def get_raw_document(
     filename = "document.bin"
     content_type: Optional[str] = None
     
-    # Strategy 1: Try local file path (for file:// URIs)
+    # Strategy 1: Try local file path (for file:// URIs).
+    # Sandboxed against path traversal (audit H-8): the canonical path must sit
+    # under the configured allow-list root, which is empty (disabled) by default.
     if doc.source_uri and doc.source_uri.startswith("file://"):
-        file_path = doc.source_uri.replace("file://", "")
-        if os.path.exists(file_path):
+        safe_path = _resolve_sandboxed_local_path(
+            doc.source_uri, get_settings().allowed_local_file_root
+        )
+        if safe_path is None:
+            logger.warning(
+                f"[{doc_id}] Refusing unsafe, disabled, or missing file:// source_uri"
+            )
+        else:
             try:
-                with open(file_path, "rb") as f:
+                with open(safe_path, "rb") as f:
                     raw_bytes = f.read()
-                filename = Path(file_path).name
+                filename = Path(safe_path).name
                 content_type = _infer_media_type(filename, None)
-                logger.info(f"[{doc_id}] Loaded raw file from local path: {file_path}")
+                logger.info(f"[{doc_id}] Loaded raw file from local path: {safe_path}")
             except Exception as e:
                 logger.warning(f"[{doc_id}] Failed to read local file: {e}")
     
