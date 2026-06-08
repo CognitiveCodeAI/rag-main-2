@@ -690,6 +690,7 @@ class TestACLRouteHardening:
     def test_acl_policy_get_unavailable_when_acl_disabled(self, mock_get_settings):
         settings = MagicMock()
         settings.acl_enabled = False
+        settings.auth_enabled = False
         mock_get_settings.return_value = settings
 
         response = client.get(f"/v1/acl/documents/{uuid.uuid4()}/policy")
@@ -700,6 +701,7 @@ class TestACLRouteHardening:
     def test_acl_policy_update_unavailable_when_acl_disabled(self, mock_get_settings):
         settings = MagicMock()
         settings.acl_enabled = False
+        settings.auth_enabled = False
         mock_get_settings.return_value = settings
 
         response = client.put(

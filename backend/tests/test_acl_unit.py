@@ -79,7 +79,7 @@ class TestEntitlementsResolver:
         )
 
     def test_from_request_returns_none_when_acl_disabled(self):
-        settings = SimpleNamespace(acl_enabled=False)
+        settings = SimpleNamespace(acl_enabled=False, auth_enabled=False)
         request = self._request(
             {
                 "X-Tenant-Id": "tenant-a",
@@ -90,7 +90,7 @@ class TestEntitlementsResolver:
         assert EntitlementsResolver.from_request(request, settings) is None
 
     def test_require_fails_closed_when_acl_disabled(self):
-        settings = SimpleNamespace(acl_enabled=False)
+        settings = SimpleNamespace(acl_enabled=False, auth_enabled=False)
         request = self._request()
 
         with pytest.raises(HTTPException) as exc_info:
@@ -102,6 +102,7 @@ class TestEntitlementsResolver:
     def test_require_resolves_entitlements_when_acl_enabled(self):
         settings = SimpleNamespace(
             acl_enabled=True,
+            auth_enabled=False,
             acl_strict_mode=True,
             acl_admin_roles=["admin"],
         )

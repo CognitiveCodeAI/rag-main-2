@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.acl.dependencies import get_entitlements
+from app.acl.models import Entitlements
 from app.db.session import get_session
 from app.settings_service import (
     get_or_create_settings,
@@ -18,6 +20,17 @@ from app.settings_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _require_admin(entitlements: Optional[Entitlements]) -> None:
+    """Authorize an admin-only mutation.
+
+    When authenticated (entitlements present), require the admin role.
+    When entitlements is None (auth + ACL both off — local dev), allow, to
+    preserve existing unauthenticated dev behavior.
+    """
+    if entitlements is not None and not entitlements.is_admin:
+        raise HTTPException(status_code=403, detail="Admin role required")
 
 router = APIRouter(prefix="/v1/settings", tags=["settings"])
 
@@ -98,10 +111,14 @@ def _model_to_response(settings_row) -> AppSettingsResponse:
 
 
 @router.get("", response_model=AppSettingsResponse)
-async def get_settings(db: Session = Depends(get_session)) -> AppSettingsResponse:
+async def get_settings(
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> AppSettingsResponse:
     """Get current application settings.
 
-    Returns all configurable settings with their current values.
+    Requires authentication when auth is enabled (the dependency fails closed);
+    open in unauthenticated dev mode.
     """
     try:
         settings_row = get_or_create_settings(db)
@@ -120,13 +137,16 @@ async def get_settings(db: Session = Depends(get_session)) -> AppSettingsRespons
 
 @router.put("", response_model=AppSettingsResponse)
 async def update_app_settings(
-    updates: AppSettingsUpdate, db: Session = Depends(get_session)
+    updates: AppSettingsUpdate,
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> AppSettingsResponse:
-    """Update application settings.
+    """Update application settings (admin only when authenticated).
 
     Accepts partial updates - only provided fields will be changed.
     All updates take effect immediately (cache is invalidated).
     """
+    _require_admin(entitlements)
     try:
         # Extract non-None values
         update_dict = {k: v for k, v in updates.model_dump().items() if v is not None}
@@ -155,11 +175,13 @@ async def update_app_settings(
 @router.post("/reset", response_model=AppSettingsResponse)
 async def reset_app_settings(
     db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> AppSettingsResponse:
-    """Reset all settings to default values.
+    """Reset all settings to default values (admin only when authenticated).
 
     Restores all settings to their factory defaults.
     """
+    _require_admin(entitlements)
     try:
         logger.info("Resetting all settings to defaults")
         settings_row = reset_settings(db)

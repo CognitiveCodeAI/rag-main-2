@@ -121,6 +121,22 @@ class Settings(BaseSettings):
     acl_admin_roles: list[str] = ["admin"]       # Roles that bypass ACL checks
     acl_default_tenant_id: str = "default"       # Tenant for pre-ACL data
 
+    # JWT/OIDC authentication (C2/C3 — replaces trusted-header identity).
+    # When auth_enabled, identity is taken from a verified Bearer token instead
+    # of X-* headers, and write routes require a valid token. Default OFF so
+    # local dev and the default test suite keep working with no token.
+    auth_enabled: bool = False
+    oidc_issuer: str = ""                         # expected `iss` (also used to derive JWKS if jwks_url empty)
+    oidc_audience: str = ""                       # expected `aud`
+    oidc_jwks_url: str = ""                       # JWKS endpoint; if empty, derived from issuer
+    jwt_algorithms: list[str] = ["RS256"]         # ASYMMETRIC allow-list only (never HS*/none)
+    jwt_leeway_seconds: int = 30                  # clock-skew tolerance for exp/nbf
+    jwt_jwks_timeout_seconds: float = 5.0         # JWKS fetch timeout (fail closed)
+    jwt_tenant_claim: str = "tenant_id"           # claim -> Entitlements.tenant_id
+    jwt_user_claim: str = "sub"                   # claim -> Entitlements.user_id
+    jwt_roles_claim: str = "roles"                # claim (list or comma-string) -> roles
+    jwt_groups_claim: str = "groups"              # claim (list or comma-string) -> groups
+
     @field_validator("acl_disclosure_mode")
     @classmethod
     def validate_acl_disclosure_mode(cls, v: str) -> str:
@@ -128,6 +144,30 @@ class Settings(BaseSettings):
         if v not in valid:
             raise ValueError(f"acl_disclosure_mode must be one of {valid}, got '{v}'")
         return v
+
+    @field_validator("jwt_algorithms")
+    @classmethod
+    def validate_jwt_algorithms(cls, v: list[str]) -> list[str]:
+        # Asymmetric only. Symmetric (HS*) algorithms enable key-confusion
+        # attacks against a public JWKS, and "none" disables verification.
+        allowed = {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "EdDSA"}
+        if not v:
+            raise ValueError("jwt_algorithms must not be empty")
+        bad = [a for a in v if a not in allowed]
+        if bad:
+            raise ValueError(
+                f"jwt_algorithms must be asymmetric; rejected {bad}. Allowed: {sorted(allowed)}"
+            )
+        return v
+
+    @property
+    def effective_jwks_url(self) -> str:
+        """JWKS endpoint: explicit oidc_jwks_url, else derived from the issuer."""
+        if self.oidc_jwks_url:
+            return self.oidc_jwks_url
+        if self.oidc_issuer:
+            return self.oidc_issuer.rstrip("/") + "/.well-known/jwks.json"
+        return ""
 
     @field_validator("docling_mode")
     @classmethod
@@ -191,6 +231,18 @@ class Settings(BaseSettings):
             problems.append("MINIO_ACCESS_KEY is empty or the insecure default 'minioadmin'.")
         if self.minio_secret_key in ("", "minioadmin"):
             problems.append("MINIO_SECRET_KEY is empty or the insecure default 'minioadmin'.")
+        if not self.auth_enabled:
+            problems.append(
+                "AUTH_ENABLED is false — in-app token verification is bypassed and "
+                "unsigned X-* identity headers would be trusted. Set AUTH_ENABLED=true."
+            )
+        else:
+            if not self.oidc_issuer:
+                problems.append("AUTH_ENABLED is true but OIDC_ISSUER is not configured.")
+            if not self.oidc_audience:
+                problems.append("AUTH_ENABLED is true but OIDC_AUDIENCE is not configured.")
+            if not self.effective_jwks_url:
+                problems.append("AUTH_ENABLED is true but no JWKS URL is configured or derivable.")
         return problems
     
     def log_configuration_summary(self) -> None:

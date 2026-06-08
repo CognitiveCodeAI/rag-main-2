@@ -477,8 +477,11 @@ async def metadata_preview(
     file: UploadFile = File(...),
     source_type: Optional[str] = Form(None),
     tenant_id: Optional[str] = Form(None),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> MetadataPreviewResponse:
     """Upload and stage a file, then return extracted metadata for user review."""
+    if entitlements is not None:
+        tenant_id = entitlements.tenant_id  # C2: tenant from verified identity
     content = await _read_upload_content(file)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -549,8 +552,19 @@ async def metadata_preview(
 
 
 @router.post("/process", response_model=IngestResponse)
-async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse:
+async def process_metadata_preview(
+    req: ProcessPreviewRequest,
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> IngestResponse:
     """Process a previously staged preview after metadata review/editing."""
+    if entitlements is not None:
+        req.tenant_id = entitlements.tenant_id  # C2: tenant from verified identity
+        if not entitlements.is_admin:
+            # Non-admins may not set document ACL fields (privilege escalation).
+            req.visibility = None
+            req.allowed_roles = None
+            req.allowed_groups = None
+            req.allowed_users = None
     _validate_ingestion_backend(req.ingestion_backend)
     _validate_visibility(req.visibility)
 
@@ -707,20 +721,34 @@ async def ingest_document(
     allowed_roles: Optional[str] = Form(None),    # JSON array string e.g. '["analyst"]'
     allowed_groups: Optional[str] = Form(None),   # JSON array string
     allowed_users: Optional[str] = Form(None),    # JSON array string
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
 ) -> IngestResponse:
     """Ingest a document for processing.
-    
+
     Accepts a file upload and queues it for async processing.
-    
+
     Args:
         file: Uploaded document file
         source_type: Optional source type override (pdf, docx, pptx, html, md, txt, csv, xlsx)
         doc_id: Optional document ID override (auto-generated if not provided)
         ingestion_backend: Optional backend override ("native" or "docling")
-    
+
     Returns:
         IngestResponse with job tracking info
     """
+    # C2: when authenticated, the tenant comes from verified identity, never
+    # the request body. (get_entitlements verifies the token when auth_enabled
+    # and returns None in unauthenticated dev mode.)
+    if entitlements is not None:
+        tenant_id = entitlements.tenant_id
+        # Non-admins may not set document ACL fields (privilege escalation):
+        # drop client-supplied visibility/allow-lists and use the default.
+        if not entitlements.is_admin:
+            visibility = None
+            allowed_roles = None
+            allowed_groups = None
+            allowed_users = None
+
     # Read file content
     content = await _read_upload_content(file)
     if not content:
