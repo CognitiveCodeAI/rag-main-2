@@ -68,6 +68,7 @@ def ingest_document_task(
                 job = session.query(IngestJob).filter_by(job_id=job_uuid).first()
                 if job:
                     job.pipeline_stage = stage
+                    job.last_heartbeat_at = datetime.now(timezone.utc)
         except Exception:
             logger.debug(f"Failed to update stage to {stage} (non-fatal)")
 
@@ -79,6 +80,7 @@ def ingest_document_task(
                 job.status = "processing"
                 job.pipeline_stage = "retrieving_file"
                 job.started_at = datetime.now(timezone.utc)
+                job.last_heartbeat_at = datetime.now(timezone.utc)
 
         logger.info(f"Starting Graph ingestion: job={job_id}, doc={doc_id}")
 
