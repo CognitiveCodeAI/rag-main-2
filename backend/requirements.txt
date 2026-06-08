@@ -22,7 +22,7 @@ httpx==0.28.1
 # Environment and config
 python-dotenv==1.0.1
 # pymilvus->environs currently requires marshmallow v3 APIs
-marshmallow<4
+marshmallow<5
 
 # Streaming
 sse-starlette==2.2.1
