@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     ocr_timeout: int = 120  # seconds for full page OCR
     ocr_region_timeout: int = 60  # seconds for region OCR
     ocr_max_retries: int = 3
+    # Figure-OCR throughput/cost controls (E3). Region OCR calls are I/O-bound
+    # HTTP requests, run with bounded concurrency; the per-doc cap bounds spend.
+    ocr_max_concurrency: int = 4          # parallel region-OCR HTTP calls per doc
+    ocr_max_calls_per_doc: int = 60       # 0 = unlimited; beyond it, figures get empty OCR
     ocr_text_layer_fallback_enabled: bool = False  # OCR low-quality pages even when text layer exists
     ocr_text_layer_min_chars: int = 200  # Only OCR text-layer pages below this char count
 
