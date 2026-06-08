@@ -59,7 +59,13 @@ class Settings(BaseSettings):
 
     # Upload guardrails
     upload_max_file_size_mb: int = 50
-    
+
+    # Local file reads (C4 / audit H-8): documents with a file:// source_uri are
+    # only readable when their canonical path is under this allow-listed root.
+    # Empty (default) disables local file:// reads entirely — the safe default,
+    # since normal ingestion stores blobs in object storage, not the local FS.
+    allowed_local_file_root: str = ""
+
     # OpenAI Embedding settings
     openai_api_key: str = ""  # REQUIRED for embeddings - set via OPENAI_API_KEY in .env
     embedding_model: str = "text-embedding-3-large"

@@ -624,13 +624,15 @@ Return JSON only in the following format:
                     question = rewrite_result.rewritten_query
                     result.question = question  # Update the result with rewritten query
                     logger.info(
-                        f"[QA] Query rewritten: '{result.original_question[:40]}...' -> "
-                        f"'{question[:40]}...' (context={rewrite_result.doc_context_used})"
+                        "[QA] Query rewritten (orig_len=%d, new_len=%d, context=%s)",
+                        len(result.original_question or ""),
+                        len(question),
+                        rewrite_result.doc_context_used,
                     )
-            
+
             # 1. Query normalization
             if self.enable_normalization:
-                logger.info(f"[QA] Normalizing query: {question[:50]}...")
+                logger.info("[QA] Normalizing query (len=%d)", len(question))
                 start = time.time()
                 normalized: NormalizedQuery = normalize_query(question, doc_id)
                 result.normalization_time_ms = (time.time() - start) * 1000
@@ -2504,7 +2506,7 @@ Return JSON only in the following format:
         
         try:
             # ===== PHASE 1: Plan =====
-            logger.info(f"[PropSafety] Planning: {question[:50]}...")
+            logger.info("[PropSafety] Planning (len=%d)", len(question))
             planner = Planner(self.llm_client, config)
             sub_questions, needs_clarification, planner_latency = planner.plan(question)
             total_llm_calls += 1
