@@ -1321,6 +1321,12 @@ Return JSON only in the following format:
 
         exact_count = 0
         unresolved_count = 0
+        dropped_ungrounded = 0
+        # D1 (audit H-4): citations must be grounded in the retrieved context.
+        # When context node IDs are known, drop any citation the model emitted
+        # that does not correspond to a packed-context node (hallucinated cite).
+        context_id_set = set(context_node_ids or [])
+        enforce_grounding = bool(context_id_set)
         resolve_latency_ms = 0.0
         snapshot_count = 0
 
@@ -1354,7 +1360,22 @@ Return JSON only in the following format:
             # Fallback: if node_id didn't match (e.g., "seed"), look up by page_no
             if not node and c.page_no and c.page_no in page_to_node:
                 node = page_to_node[c.page_no]
-            
+
+            # D1 (audit H-4): a citation is grounded only if its node_id is in the
+            # packed context, or its page maps to a context node. Otherwise the
+            # model cited evidence that was never retrieved — drop it.
+            if enforce_grounding and c.node_id not in context_id_set and (
+                c.page_no is None or c.page_no not in page_to_node
+            ):
+                dropped_ungrounded += 1
+                logger.warning(
+                    "[QA] Dropping ungrounded citation node_id=%r page=%s "
+                    "(not in retrieved context)",
+                    c.node_id,
+                    c.page_no,
+                )
+                continue
+
             # Use doc_id from node if not provided (searching all documents)
             citation_doc_id = doc_id
             citation_version = version
@@ -1638,7 +1659,8 @@ Return JSON only in the following format:
         with_snippet = sum(1 for item in hydrated_citations if item.get("anchor_snippet"))
         logger.info(
             f"[QA] Hydrated {len(hydrated_citations)} citations: "
-            f"{with_bbox} with bbox, {with_snippet} with anchor_snippet"
+            f"{with_bbox} with bbox, {with_snippet} with anchor_snippet, "
+            f"{dropped_ungrounded} dropped as ungrounded"
         )
         logger.info(
             "[QA] Highlight metrics: "

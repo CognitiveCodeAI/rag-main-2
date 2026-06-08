@@ -9,7 +9,23 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
-from openai import OpenAI
+import httpx
+
+from openai import (
+    OpenAI,
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
+
+# Transient OpenAI failures worth retrying with backoff (D2 / audit H-3).
+_RETRYABLE_OPENAI_ERRORS = (
+    RateLimitError,
+    APITimeoutError,
+    APIConnectionError,
+    InternalServerError,
+)
 
 from app.config import get_settings
 
@@ -128,7 +144,12 @@ CANDIDATES:
 
 class OpenAIClient:
     """Client for generating answers using OpenAI GPT models."""
-    
+
+    # Bounded exponential backoff for transient API failures (D2 / audit H-3).
+    RETRY_ATTEMPTS = 3
+    RETRY_BASE_DELAY_S = 1.0
+    RETRY_MAX_DELAY_S = 10.0
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -150,7 +171,35 @@ class OpenAIClient:
         self.client = OpenAI(api_key=self.api_key)
         
         logger.info(f"OpenAI client initialized with model: {self.model}")
-    
+
+    def _responses_create_with_retry(self, req: dict, timeout_sec: float):
+        """Call the Responses API with bounded exponential backoff.
+
+        Retries only transient failures (rate limit, timeout, connection,
+        5xx). Non-transient errors and the final attempt re-raise immediately.
+        (D2 / audit H-3 — the answer call previously had no retry.)
+        """
+        client = self.client.with_options(timeout=httpx.Timeout(timeout_sec))
+        for attempt in range(self.RETRY_ATTEMPTS):
+            try:
+                return client.responses.create(**req)
+            except _RETRYABLE_OPENAI_ERRORS as exc:
+                if attempt >= self.RETRY_ATTEMPTS - 1:
+                    logger.error(
+                        "OpenAI answer call failed after %d attempts: %s: %s",
+                        self.RETRY_ATTEMPTS, type(exc).__name__, exc,
+                    )
+                    raise
+                delay = min(
+                    self.RETRY_BASE_DELAY_S * (2 ** attempt),
+                    self.RETRY_MAX_DELAY_S,
+                )
+                logger.warning(
+                    "OpenAI transient error (attempt %d/%d): %s — retrying in %.1fs",
+                    attempt + 1, self.RETRY_ATTEMPTS, type(exc).__name__, delay,
+                )
+                time.sleep(delay)
+
     def generate_answer(
         self,
         context: str,
@@ -179,8 +228,6 @@ class OpenAIClient:
         Returns:
             AnswerResult with answer, citations, and metadata
         """
-        import httpx
-        
         start_time = time.time()
         
         # Build user message
@@ -208,10 +255,8 @@ Please answer the question based ONLY on the provided context. Remember to cite 
         try:
             # Apply timeout for reliability
             timeout_sec = timeout_ms / 1000.0
-            response = self.client.with_options(
-                timeout=httpx.Timeout(timeout_sec)
-            ).responses.create(**req)
-            
+            response = self._responses_create_with_retry(req, timeout_sec)
+
             generation_time = (time.time() - start_time) * 1000
             
             answer_text = self._response_text(response).strip()
