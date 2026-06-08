@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.worker import celery_app
+from app.observability.tasking import enqueue
 from app.storage.minio_client import get_storage_client
 from app.embeddings.client import EmbeddingClient
 from app.embeddings.vector_record import MultiViewVectorRecordBuilder
@@ -85,7 +86,7 @@ def embed_chunks_task(
         
         # 7. Queue index task
         from app.tasks.index import index_vectors_task
-        index_vectors_task.delay(doc_id, version_id)
+        enqueue(index_vectors_task, doc_id, version_id)
         logger.info("Queued index task")
         
         return {

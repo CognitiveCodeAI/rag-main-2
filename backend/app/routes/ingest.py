@@ -24,6 +24,7 @@ from app.graph.backend_selector import get_supported_types
 from app.metadata.extractor import MetadataExtractor
 from app.services.worker_health import inspect_celery_workers
 from app.services.job_sweeper import sweep_stale_jobs
+from app.observability.tasking import enqueue
 from app.storage.minio_client import get_storage_client
 from app.tasks.ingest import ingest_document_task
 
@@ -681,7 +682,7 @@ async def process_metadata_preview(
         preview.processed_at = datetime.now(timezone.utc)
         preview.tenant_id = effective_tenant
 
-    ingest_document_task.delay(
+    enqueue(ingest_document_task,
         job_id=job_id,
         doc_id=final_doc_id,
         version_id=final_version_id,
@@ -832,7 +833,7 @@ async def ingest_document(
     # SIDE EFFECT:
     # DB state is committed before broker publish; enqueue failures leave pending jobs requiring explicit recovery/retry tooling.
     # Queue Celery task
-    ingest_document_task.delay(
+    enqueue(ingest_document_task,
         job_id=job_id,
         doc_id=doc_id,
         version_id=version_id,
