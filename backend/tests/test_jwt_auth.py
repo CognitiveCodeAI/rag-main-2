@@ -203,6 +203,34 @@ def test_settings_write_requires_admin_when_authenticated():
         app.dependency_overrides.pop(get_entitlements, None)
 
 
+def test_delete_document_requires_admin_when_authenticated():
+    from fastapi.testclient import TestClient
+    from main import app
+    from app.acl.dependencies import get_entitlements
+    from app.acl.models import Entitlements
+
+    nonadmin = Entitlements(
+        tenant_id="acme", user_id="u1",
+        roles=frozenset({"analyst"}), groups=frozenset(), is_admin=False,
+    )
+    app.dependency_overrides[get_entitlements] = lambda: nonadmin
+    try:
+        client = TestClient(app)
+        resp = client.delete("/v1/documents/some-doc-id")
+        assert resp.status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_entitlements, None)
+
+
+def test_settings_read_requires_auth_when_enabled(monkeypatch):
+    from fastapi.testclient import TestClient
+    from main import app
+
+    monkeypatch.setattr("app.acl.dependencies.get_settings", lambda: _settings())
+    client = TestClient(app)
+    assert client.get("/v1/settings").status_code == 401
+
+
 def test_unauthenticated_write_route_rejected_when_auth_enabled(monkeypatch):
     # C2 acceptance: with auth enabled, POST /v1/ingest/document without a
     # bearer token is rejected (no token ever reaches ingestion).

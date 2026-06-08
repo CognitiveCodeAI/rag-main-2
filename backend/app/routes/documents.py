@@ -829,6 +829,10 @@ async def delete_document(
     - MinIO (file artifacts)
     - ContentRegistry (deduplication tracking)
     """
+    # Destructive, cross-system operation: require admin when authenticated.
+    if entitlements is not None and not entitlements.is_admin:
+        raise HTTPException(status_code=403, detail="Admin role required to delete documents")
+
     # 1. Verify document exists and check ACL
     doc = db.query(DocumentGraph).filter(DocumentGraph.doc_id == doc_id).first()
     if not doc:

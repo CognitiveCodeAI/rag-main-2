@@ -111,10 +111,14 @@ def _model_to_response(settings_row) -> AppSettingsResponse:
 
 
 @router.get("", response_model=AppSettingsResponse)
-async def get_settings(db: Session = Depends(get_session)) -> AppSettingsResponse:
+async def get_settings(
+    db: Session = Depends(get_session),
+    entitlements: Optional[Entitlements] = Depends(get_entitlements),
+) -> AppSettingsResponse:
     """Get current application settings.
 
-    Returns all configurable settings with their current values.
+    Requires authentication when auth is enabled (the dependency fails closed);
+    open in unauthenticated dev mode.
     """
     try:
         settings_row = get_or_create_settings(db)
