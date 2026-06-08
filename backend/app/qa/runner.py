@@ -1181,6 +1181,8 @@ Return JSON only in the following format:
                 doc_id=doc_id,
                 version=version
             )
+            # E1: ACL-filter expansion neighbours before they reach packing.
+            expanded = self._acl_filter_expanded(expanded)
             result.expansion_time_ms = (time.time() - start) * 1000
             logger.info(
                 f"[QA] Expansion: {len(expanded.seed_nodes)} seeds, "
@@ -1267,6 +1269,31 @@ Return JSON only in the following format:
 
         return result
     
+    def _acl_filter_expanded(self, expanded: ExpandedContext) -> ExpandedContext:
+        """Single ACL choke point for graph-expansion results (E1).
+
+        Every node that reaches context packing — seeds AND the adjacent /
+        referenced / explained-by neighbours pulled in by expansion — must pass
+        the node-level ACL filter, otherwise restricted neighbour content could
+        be packed into the LLM context even though it is never cited. This is
+        the one place expansion is filtered; both the standard and
+        propagation-safety retrieval paths route through it. When ACL is
+        disabled, filter_nodes returns its input unchanged (behaviour-preserving).
+        """
+        expanded.seed_nodes = self.acl_enforcer.filter_nodes(
+            expanded.seed_nodes, stage="expansion_seed"
+        )
+        expanded.adjacent_nodes = self.acl_enforcer.filter_nodes(
+            expanded.adjacent_nodes, stage="expansion_adjacent"
+        )
+        expanded.referenced_nodes = self.acl_enforcer.filter_nodes(
+            expanded.referenced_nodes, stage="expansion_referenced"
+        )
+        expanded.explained_by_nodes = self.acl_enforcer.filter_nodes(
+            expanded.explained_by_nodes, stage="expansion_explained_by"
+        )
+        return expanded
+
     def _hydrate_citations(
         self,
         citations: List['Citation'],
@@ -2747,9 +2774,10 @@ Return JSON only in the following format:
             
             # 9. Graph expansion
             expanded = self.expander.expand(seed_node_ids)
-            # SECURITY ASSUMPTION:
-            # Sub-question evidence inherits ACL guarantees from expander; exporting pre-expansion seeds would require explicit ACL filtering.
-            
+            # E1: the expander does NOT apply ACL — filter expansion neighbours
+            # through the shared choke point before they reach packing/snippets.
+            expanded = self._acl_filter_expanded(expanded)
+
             # 10. Conflict detection
             expanded_nodes_meta = self._collect_expanded_nodes_metadata(expanded)
             conflict_result = detect_conflicts(expanded_nodes_meta, constraints)
