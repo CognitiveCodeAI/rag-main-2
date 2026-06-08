@@ -25,7 +25,7 @@ python-dotenv==1.0.1
 marshmallow<4
 
 # Streaming
-sse-starlette==2.2.1
+sse-starlette==3.4.4
 
 # Date/time
 python-dateutil==2.9.0
