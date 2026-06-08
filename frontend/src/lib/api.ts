@@ -339,6 +339,32 @@ export class APIError extends Error {
   }
 }
 
+const DEFAULT_TIMEOUT_MS = 30000;
+
+/**
+ * fetch() with an AbortController timeout so a stalled request can't hang the
+ * UI forever (D5 / audit M-8). Same signature as fetch plus an optional
+ * timeoutMs; on timeout it throws an APIError with status 0.
+ */
+async function fetchWithTimeout(
+  input: string,
+  init?: RequestInit & { timeoutMs?: number }
+): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...rest } = init ?? {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...rest, signal: controller.signal });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new APIError(`Request timed out after ${timeoutMs}ms`, 0, input);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let detail: unknown;
@@ -365,7 +391,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
  */
 export async function getHealth(checkServices = false): Promise<HealthResponse> {
   const query = checkServices ? "?check_services=true" : "";
-  const response = await fetch(`${API_BASE_URL}/health${query}`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/health${query}`);
   return handleResponse<HealthResponse>(response);
 }
 
@@ -373,7 +399,7 @@ export async function getHealth(checkServices = false): Promise<HealthResponse> 
  * Get vector collection statistics
  */
 export async function getCollections(): Promise<CollectionsResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/retrieve/collections`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/retrieve/collections`);
   return handleResponse<CollectionsResponse>(response);
 }
 
@@ -381,7 +407,7 @@ export async function getCollections(): Promise<CollectionsResponse> {
  * Get source/selector artifact availability for a document.
  */
 export async function getSourceManifest(docId: string): Promise<SourceManifestResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/documents/${docId}/source-manifest`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/documents/${docId}/source-manifest`);
   return handleResponse<SourceManifestResponse>(response);
 }
 
@@ -389,7 +415,7 @@ export async function getSourceManifest(docId: string): Promise<SourceManifestRe
  * Get canonical source map for selector-based highlighting.
  */
 export async function getSourceMap(docId: string): Promise<SourceMapResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/documents/${docId}/source-map`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/documents/${docId}/source-map`);
   return handleResponse<SourceMapResponse>(response);
 }
 
@@ -409,7 +435,7 @@ export async function listDocuments(params?: {
   if (params?.doc_type) searchParams.set("doc_type", params.doc_type);
 
   const url = `${API_BASE_URL}/v1/documents?${searchParams.toString()}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   return handleResponse<DocumentListResponse>(response);
 }
 
@@ -430,7 +456,7 @@ export async function listDocumentNodes(
   if (params?.node_type) searchParams.set("node_type", params.node_type);
 
   const url = `${API_BASE_URL}/v1/documents/${docId}/nodes?${searchParams.toString()}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   return handleResponse<NodeListResponse>(response);
 }
 
@@ -444,7 +470,7 @@ export async function askQuestion(params: {
   chat_history?: Array<{ role: "user" | "assistant"; content: string }>;
   mode?: "standard" | "propagation_safety";
 }): Promise<AskResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/qa/ask`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/qa/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -461,7 +487,7 @@ export async function vectorSearch(params: {
   top_k?: number;
   doc_id?: string;
 }): Promise<VectorRetrieveResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/retrieve/vector`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/retrieve/vector`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -481,7 +507,7 @@ export async function listIngestJobs(params?: {
   if (params?.status) searchParams.set("status", params.status);
 
   const url = `${API_BASE_URL}/v1/ingest/jobs?${searchParams.toString()}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   return handleResponse<IngestJobListResponse>(response);
 }
 
@@ -497,7 +523,7 @@ export async function listEmbedJobs(params?: {
   if (params?.status) searchParams.set("status", params.status);
 
   const url = `${API_BASE_URL}/v1/embed/jobs?${searchParams.toString()}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   return handleResponse<EmbedJobListResponse>(response);
 }
 
@@ -533,7 +559,7 @@ export async function ingestDocument(
     formData.append("allowed_users", JSON.stringify(options.allowed_users));
   }
 
-  const response = await fetch(`${API_BASE_URL}/v1/ingest/document`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/ingest/document`, {
     method: "POST",
     body: formData,
   });
@@ -549,7 +575,7 @@ export async function extractMetadataPreview(
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}/v1/ingest/metadata-preview`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/ingest/metadata-preview`, {
     method: "POST",
     body: formData,
   });
@@ -573,7 +599,7 @@ export async function processMetadataPreview(params: {
   version_id: string;
   job_id: string;
 }> {
-  const response = await fetch(`${API_BASE_URL}/v1/ingest/process`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/ingest/process`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -595,14 +621,34 @@ export async function pollIngestJob(
   const interval = options?.interval || 2000;
   const maxAttempts = options?.maxAttempts || 120;
   let attempts = 0;
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 5;
 
   while (attempts < maxAttempts) {
-    const response = await fetch(`${API_BASE_URL}/v1/ingest/job/${jobId}`);
-    const job = await handleResponse<IngestJob>(response);
+    let job: IngestJob;
+    try {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/v1/ingest/job/${jobId}`);
+      job = await handleResponse<IngestJob>(response);
+      consecutiveErrors = 0;
+    } catch (err) {
+      // Circuit breaker: give up after repeated failures instead of polling forever.
+      if (++consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, interval));
+      attempts++;
+      continue;
+    }
 
     options?.onProgress?.(job);
 
-    if (job.status === "completed" || job.status === "failed") {
+    // Terminal states (skipped_alias is terminal — previously missing, causing
+    // alias ingests to poll forever).
+    if (
+      job.status === "completed" ||
+      job.status === "failed" ||
+      job.status === "skipped_alias"
+    ) {
       if (job.status === "failed") {
         throw new Error(job.error || "Ingestion failed");
       }
@@ -623,7 +669,7 @@ export async function embedDocument(params: {
   doc_id: string;
   version_id: string;
 }): Promise<{ job_id: string }> {
-  const response = await fetch(`${API_BASE_URL}/v1/embed/document`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/embed/document`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -645,10 +691,23 @@ export async function pollEmbedJob(
   const interval = options?.interval || 3000;
   const maxAttempts = options?.maxAttempts || 120;
   let attempts = 0;
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 5;
 
   while (attempts < maxAttempts) {
-    const response = await fetch(`${API_BASE_URL}/v1/embed/job/${jobId}`);
-    const job = await handleResponse<EmbeddingJob>(response);
+    let job: EmbeddingJob;
+    try {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/v1/embed/job/${jobId}`);
+      job = await handleResponse<EmbeddingJob>(response);
+      consecutiveErrors = 0;
+    } catch (err) {
+      if (++consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, interval));
+      attempts++;
+      continue;
+    }
 
     options?.onProgress?.(job);
 
@@ -702,7 +761,7 @@ export interface PromptListResponse {
  * List all available prompts
  */
 export async function listPrompts(): Promise<PromptListResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/prompts`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/prompts`);
   return handleResponse<PromptListResponse>(response);
 }
 
@@ -716,7 +775,7 @@ export async function getPrompt(
   const url = version
     ? `${API_BASE_URL}/v1/prompts/${name}?version=${version}`
     : `${API_BASE_URL}/v1/prompts/${name}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   return handleResponse<PromptDetail>(response);
 }
 
@@ -724,7 +783,7 @@ export async function getPrompt(
  * List all versions available for a prompt
  */
 export async function listPromptVersions(name: string): Promise<string[]> {
-  const response = await fetch(`${API_BASE_URL}/v1/prompts/${name}/versions`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/prompts/${name}/versions`);
   return handleResponse<string[]>(response);
 }
 
@@ -756,7 +815,7 @@ export interface PolicyUpdateRequest {
  * Get ACL policy for a document
  */
 export async function getDocumentPolicy(docId: string): Promise<DocumentPolicy> {
-  const response = await fetch(`${API_BASE_URL}/v1/acl/documents/${docId}/policy`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/acl/documents/${docId}/policy`);
   return handleResponse<DocumentPolicy>(response);
 }
 
@@ -767,7 +826,7 @@ export async function updateDocumentPolicy(
   docId: string,
   policy: PolicyUpdateRequest
 ): Promise<DocumentPolicy> {
-  const response = await fetch(`${API_BASE_URL}/v1/acl/documents/${docId}/policy`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/acl/documents/${docId}/policy`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(policy),
@@ -779,7 +838,7 @@ export async function updateDocumentPolicy(
  * Delete a document and all associated data
  */
 export async function deleteDocument(docId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/v1/documents/${docId}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/documents/${docId}`, {
     method: "DELETE",
   });
 
@@ -826,7 +885,7 @@ export type AppSettingsUpdate = Partial<Omit<AppSettings, "updated_at">>;
  * Get current application settings
  */
 export async function getSettings(): Promise<AppSettings> {
-  const response = await fetch(`${API_BASE_URL}/v1/settings`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/settings`);
   return handleResponse<AppSettings>(response);
 }
 
@@ -836,7 +895,7 @@ export async function getSettings(): Promise<AppSettings> {
 export async function updateSettings(
   updates: AppSettingsUpdate
 ): Promise<AppSettings> {
-  const response = await fetch(`${API_BASE_URL}/v1/settings`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
@@ -848,7 +907,7 @@ export async function updateSettings(
  * Reset all settings to defaults
  */
 export async function resetSettings(): Promise<AppSettings> {
-  const response = await fetch(`${API_BASE_URL}/v1/settings/reset`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/v1/settings/reset`, {
     method: "POST",
   });
   return handleResponse<AppSettings>(response);
