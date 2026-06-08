@@ -7,7 +7,7 @@ whether reranking should run in production.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -48,7 +48,7 @@ def save_gate_metrics(metrics: Dict[str, Any]) -> Path:
     
     # Add timestamp if not present
     if "timestamp" not in metrics:
-        metrics["timestamp"] = datetime.utcnow().isoformat()
+        metrics["timestamp"] = datetime.now(timezone.utc).isoformat()
     
     with open(path, "w") as f:
         json.dump(metrics, f, indent=2)

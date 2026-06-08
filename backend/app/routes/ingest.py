@@ -155,7 +155,7 @@ def generate_doc_id(content: bytes, filename: str) -> str:
 
 def generate_version_id() -> str:
     """Generate a version ID (timestamp + random)."""
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     rand = uuid.uuid4().hex[:8]
     return f"v{ts}-{rand}"
 
@@ -324,7 +324,7 @@ def _cleanup_expired_previews(session) -> None:
 def _is_preview_expired(expires_at: datetime) -> bool:
     """Safely compare aware/naive preview timestamps against current UTC time."""
     if expires_at.tzinfo is None:
-        return expires_at < datetime.utcnow()
+        return expires_at < datetime.now(timezone.utc)
     return expires_at < datetime.now(timezone.utc)
 
 
@@ -663,7 +663,7 @@ async def process_metadata_preview(req: ProcessPreviewRequest) -> IngestResponse
         job_id = str(job.job_id)
 
         preview.status = "processed"
-        preview.processed_at = datetime.utcnow()
+        preview.processed_at = datetime.now(timezone.utc)
         preview.tenant_id = effective_tenant
 
     ingest_document_task.delay(

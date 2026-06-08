@@ -6,7 +6,7 @@ Phase 1: Document ingestion pipeline now active.
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -194,7 +194,7 @@ async def health(check_services: bool = Query(default=False, description="Check 
     return HealthResponse(
         status=overall_status,
         version=settings.app_version,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         config_warnings=warnings,
         services=services,
         features={
@@ -211,7 +211,7 @@ async def health_live():
     return {
         "status": "healthy",
         "version": settings.app_version,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc),
     }
 
 
