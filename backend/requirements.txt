@@ -13,7 +13,7 @@ python-multipart==0.0.18
 
 # Data validation
 pydantic==2.10.4
-pydantic-settings==2.7.1
+pydantic-settings==2.14.1
 jsonschema==4.26.0
 
 # CORS and HTTP
