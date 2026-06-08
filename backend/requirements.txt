@@ -1,3 +1,7 @@
+# This is the human-edited dependency manifest (direct deps, all pinned).
+# requirements.lock is the fully-resolved transitive lock for reproducibility;
+# regenerate it after changing this file:  uv pip compile requirements.txt -o requirements.lock
+
 # Build/runtime shim: pymilvus 2.4.9 imports pkg_resources, which setuptools>=81 removed.
 # Pin below 81 so a fresh venv (esp. Python 3.12+, which omits setuptools by default) keeps pkg_resources.
 setuptools<81
@@ -10,7 +14,7 @@ python-multipart==0.0.18
 # Data validation
 pydantic==2.10.4
 pydantic-settings==2.7.1
-jsonschema>=4.20.0
+jsonschema==4.26.0
 
 # CORS and HTTP
 httpx==0.28.1
@@ -34,13 +38,17 @@ alembic==1.14.0
 # Vector database
 pymilvus==2.4.9
 
-# OpenSearch
+# OpenSearch — OPTIONAL/EXPERIMENTAL backend. Not imported anywhere under app/
+# at runtime (only exercised by tests/test_opensearch_connection.py). Kept as a
+# pinned, documented experimental dependency; Milvus is the active vector store.
 opensearch-py==2.8.0
 
 # MinIO (S3)
 minio==7.2.15
 
-# Neo4j
+# Neo4j — OPTIONAL/EXPERIMENTAL backend. Not imported anywhere under app/ at
+# runtime (only tests/test_neo4j_connection.py). Pinned + documented; remove if
+# the graph-DB backend is abandoned.
 neo4j==5.28.1
 
 # Task queue
