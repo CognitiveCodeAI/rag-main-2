@@ -43,7 +43,19 @@ async def lifespan(app: FastAPI):
     if missing:
         logger.warning("Missing required settings: %s", ", ".join(missing))
         logger.warning("Embedding operations will fail until these are configured.")
-    
+
+    # Fail-closed in production: refuse to start with insecure defaults
+    # (ACL disabled, or built-in credentials). Development is unaffected.
+    if settings.is_production:
+        problems = settings.validate_production_security()
+        if problems:
+            for problem in problems:
+                logger.critical("PRODUCTION SECURITY: %s", problem)
+            raise RuntimeError(
+                "Refusing to start in production with insecure configuration: "
+                + "; ".join(problems)
+            )
+
     yield
     # Shutdown
     logger.info("Shutting down %s", settings.app_name)
@@ -56,13 +68,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS middleware — scope methods/headers explicitly rather than wildcards
+# (audit L-1). Origins remain restricted via settings.cors_origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Tenant-Id",
+        "X-User-Id",
+        "X-Roles",
+        "X-Groups",
+    ],
 )
 
 # Include routers
