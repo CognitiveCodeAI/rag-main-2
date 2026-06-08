@@ -39,6 +39,7 @@ from app.services.highlighting import (
     verify_evidence_span,
 )
 from app.storage.minio_client import get_storage_client
+from app.qa import metadata_queries
 from .evidence_span import build_evidence_spans
 from .normalizer import normalize_query, NormalizedQuery
 from .section_booster import SectionBooster, SectionBoostResult
@@ -1829,67 +1830,16 @@ Return JSON only in the following format:
         return rerank_map
     
     def _get_doc_total_pages(self, doc_id: str) -> int:
-        """Get total pages for a document.
-        
-        Args:
-            doc_id: Document ID
-            
-        Returns:
-            Total pages (0 if unknown)
-        """
-        from app.db.graph_models import DocumentGraph
-        doc = self.db.query(DocumentGraph).filter(
-            DocumentGraph.doc_id == doc_id
-        ).first()
-        
-        if doc and doc.meta:
-            return doc.meta.get("total_pages", 0)
-        return 0
-    
+        """Total pages for a document (delegates to metadata_queries)."""
+        return metadata_queries.get_doc_total_pages(self.db, doc_id)
+
     def _get_doc_collection_version(self, doc_id: Optional[str]) -> Optional[str]:
-        """Get the Milvus collection version used when document was embedded.
-        
-        This enables querying the correct collection (v1 or v2) based on
-        where the document's vectors were actually stored.
-        
-        Args:
-            doc_id: Document ID (None means search all documents)
-            
-        Returns:
-            Collection version ("v1" or "v2") or None if unknown/all docs
-        """
-        if not doc_id:
-            # Searching all documents - use default collection (v2)
-            return None
-            
-        from app.db.graph_models import DocumentGraph
-        doc = self.db.query(DocumentGraph).filter(
-            DocumentGraph.doc_id == doc_id
-        ).first()
-        
-        if doc and doc.embedded_collection_version:
-            return doc.embedded_collection_version
-        return None
-    
+        """Milvus collection version a doc was embedded into (delegates)."""
+        return metadata_queries.get_doc_collection_version(self.db, doc_id)
+
     def _get_nodes_metadata(self, node_ids: List[str]) -> Dict[str, Dict]:
-        """Get metadata for nodes.
-        
-        Args:
-            node_ids: List of node IDs
-            
-        Returns:
-            Dict of node_id -> meta dict
-        """
-        from app.db.graph_models import Node as NodeModel
-        
-        if not node_ids:
-            return {}
-        
-        nodes = self.db.query(NodeModel).filter(
-            NodeModel.node_id.in_(node_ids)
-        ).all()
-        
-        return {n.node_id: n.meta or {} for n in nodes}
+        """Metadata for nodes as {node_id -> meta} (delegates)."""
+        return metadata_queries.get_nodes_metadata(self.db, node_ids)
     
     # ==========================================================================
     # STRUCTURED-OBJECT SEED INJECTION (deterministic, no LLM)
