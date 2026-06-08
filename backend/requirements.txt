@@ -58,7 +58,7 @@ openpyxl==3.1.5
 markdown==3.7
 
 # Tokenization (for chunking)
-tiktoken==0.8.0
+tiktoken==0.13.0
 
 # Embeddings
 openai==2.15.0
