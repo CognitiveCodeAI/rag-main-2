@@ -1,0 +1,10 @@
+# Development/test dependencies (not needed at runtime).
+# Install with:  pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Test runner (used by ./dev test and CI; previously installed ad-hoc)
+pytest==9.0.3
+pytest-asyncio==1.4.0
+
+# Static type checking (baseline; wired into CI as a non-blocking check first)
+mypy==1.13.0
