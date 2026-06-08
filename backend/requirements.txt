@@ -41,7 +41,7 @@ pymilvus==2.4.9
 # OpenSearch — OPTIONAL/EXPERIMENTAL backend. Not imported anywhere under app/
 # at runtime (only exercised by tests/test_opensearch_connection.py). Kept as a
 # pinned, documented experimental dependency; Milvus is the active vector store.
-opensearch-py==2.8.0
+opensearch-py==3.2.0
 
 # MinIO (S3)
 minio==7.2.15
