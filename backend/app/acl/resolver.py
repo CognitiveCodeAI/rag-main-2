@@ -26,12 +26,17 @@ class EntitlementsResolver:
 
     @classmethod
     def from_request(cls, request: Request, settings) -> Optional[Entitlements]:
-        """Extract entitlements from request headers.
+        """Resolve entitlements for the request.
 
-        Returns None if ACL is disabled (feature flag off).
-        Returns None if headers are missing and strict_mode is off.
-        Raises 401 if headers are missing and strict_mode is on.
+        When auth_enabled (C2/C3), identity comes from a VERIFIED Bearer token
+        and a missing/invalid token raises 401 (fail closed) — the X-* headers
+        are NOT trusted in this mode. Otherwise the legacy header path applies,
+        gated by acl_enabled.
         """
+        if settings.auth_enabled:
+            from app.auth.jwt_verifier import entitlements_from_token
+            return entitlements_from_token(request, settings)
+
         if not settings.acl_enabled:
             return None
 
@@ -96,7 +101,7 @@ class EntitlementsResolver:
         Unlike from_request(), this always raises if ACL is on and headers are missing.
         If ACL is disabled, this dependency is considered unavailable and fails closed.
         """
-        if not settings.acl_enabled:
+        if not settings.auth_enabled and not settings.acl_enabled:
             raise HTTPException(
                 status_code=503,
                 detail="ACL feature is disabled",
@@ -106,6 +111,6 @@ class EntitlementsResolver:
         if result is None:
             raise HTTPException(
                 status_code=401,
-                detail="Authentication required: X-Tenant-Id and X-User-Id headers",
+                detail="Authentication required",
             )
         return result
