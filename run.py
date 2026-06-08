@@ -433,7 +433,11 @@ def build_celery_command() -> list[str]:
 
     Defaults:
     - Windows: solo pool (process forking is unavailable)
-    - macOS/Linux: prefork pool (keeps control-plane ping responsive while tasks run)
+    - macOS: solo pool (prefork forks the process; native extensions used by the
+      ingestion pipeline — PyMuPDF, gRPC — are not fork-safe on Darwin and the
+      worker aborts with SIGABRT/SIGSEGV, leaving jobs stuck in "pending")
+    - Linux: prefork pool (keeps control-plane ping responsive while tasks run)
+    Override with CELERY_POOL=prefork if you know your stack is fork-safe.
     """
     base = (
         [str(VENV_CELERY), "-A", "app.worker", "worker", "--loglevel=info"]
@@ -441,7 +445,8 @@ def build_celery_command() -> list[str]:
         else [str(VENV_PYTHON), "-m", "celery", "-A", "app.worker", "worker", "--loglevel=info"]
     )
 
-    pool = os.getenv("CELERY_POOL", "solo" if sys.platform == "win32" else "prefork")
+    default_pool = "solo" if sys.platform in ("win32", "darwin") else "prefork"
+    pool = os.getenv("CELERY_POOL", default_pool)
     cmd = [*base, "--pool", pool]
 
     if pool != "solo":
