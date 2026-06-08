@@ -14,6 +14,7 @@ from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.acl.dependencies import get_entitlements
+from app.acl.enforcer import ACLEnforcer
 from app.acl.models import DocumentACL, Entitlements
 from app.acl.postgres_filter import ACLPostgresFilter
 from app.config import get_settings
@@ -514,7 +515,12 @@ async def list_document_nodes(
     # Apply pagination and ordering
     offset = (page - 1) * limit
     nodes = query.order_by(Node.page_no, Node.chunk_index_in_page).offset(offset).limit(limit).all()
-    
+
+    # Node-level ACL: doc access alone is not sufficient — drop any node the
+    # caller is not entitled to see (node-level restrict overrides). No-op when
+    # ACL is disabled (filter_nodes returns its input unchanged).
+    nodes = ACLEnforcer(db, entitlements).filter_nodes(nodes, stage="route_list_nodes")
+
     # Build response
     items = []
     for node in nodes:
