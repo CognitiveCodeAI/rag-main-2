@@ -45,7 +45,34 @@ class BBoxLocator(BaseModel):
     page_size: Optional[PageSize] = None
 
 
-Locator = Union[TextOffsetsLocator, BBoxLocator]
+class NormalizedRect(BaseModel):
+    x0: float = Field(ge=0.0, le=1.0)
+    y0: float = Field(ge=0.0, le=1.0)
+    x1: float = Field(ge=0.0, le=1.0)
+    y1: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_extent(self) -> "NormalizedRect":
+        if self.x1 <= self.x0 or self.y1 <= self.y0:
+            raise ValueError("normalized rectangle must have positive width and height")
+        return self
+
+
+class RectsLocator(BaseModel):
+    type: Literal["rects"] = "rects"
+    coordinate_system: Literal["normalized_top_left"] = "normalized_top_left"
+    rects: List[NormalizedRect] = Field(min_length=1)
+    page_size: Optional[PageSize] = None
+    page_rotation: int = Field(default=0)
+
+    @model_validator(mode="after")
+    def validate_rotation(self) -> "RectsLocator":
+        if self.page_rotation not in (0, 90, 180, 270):
+            raise ValueError("page_rotation must be 0, 90, 180, or 270")
+        return self
+
+
+Locator = Union[TextOffsetsLocator, BBoxLocator, RectsLocator]
 
 
 class EvidenceSpan(BaseModel):
@@ -56,6 +83,32 @@ class EvidenceSpan(BaseModel):
     locator: Locator
     confidence: float = Field(ge=0.0, le=1.0)
     source_section: Optional[str] = None
+
+
+class EvidenceRecord(BaseModel):
+    """Versioned, claim-level evidence returned to source viewers."""
+
+    schema_version: Literal["2.0"] = "2.0"
+    citation_id: str = Field(pattern=r"^C[1-9][0-9]*$")
+    claim_id: Optional[str] = None
+    doc_id: str = Field(min_length=1)
+    document_version: int = Field(ge=1)
+    node_id: str = Field(min_length=1)
+    page: int = Field(ge=1)
+    exact_quote: str = Field(min_length=1)
+    source_hash: str = Field(pattern=r"^sha256:")
+    status: Literal["verified", "approximate", "unavailable"]
+    verification_reason: str = Field(min_length=1)
+    locator: Optional[Locator] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def verified_requires_rectangles(self) -> "EvidenceRecord":
+        if self.status == "verified" and not isinstance(self.locator, RectsLocator):
+            raise ValueError("verified evidence requires normalized source rectangles")
+        if self.status == "unavailable" and self.locator is not None:
+            raise ValueError("unavailable evidence cannot include a locator")
+        return self
 
 
 def normalize_page_index(page_index: int, page_index_base: int = PAGE_INDEX_BASE) -> int:

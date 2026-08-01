@@ -16,7 +16,7 @@ def _node(doc_id):
     return SimpleNamespace(doc_id=doc_id, node_id=f"{doc_id}-n")
 
 
-def test_acl_filter_expanded_filters_all_four_node_lists():
+def test_acl_filter_expanded_filters_every_node_list():
     runner = QARunner.__new__(QARunner)  # bypass heavy __init__
     enforcer = MagicMock()
     # Mock enforcement: only doc_id == "ok" is accessible.
@@ -30,6 +30,7 @@ def test_acl_filter_expanded_filters_all_four_node_lists():
         adjacent_nodes=[_node("restricted")],
         referenced_nodes=[_node("ok"), _node("ok")],
         explained_by_nodes=[_node("restricted")],
+        chain_nodes=[_node("ok"), _node("restricted")],
     )
 
     out = runner._acl_filter_expanded(expanded)
@@ -38,8 +39,9 @@ def test_acl_filter_expanded_filters_all_four_node_lists():
     assert out.adjacent_nodes == []                 # restricted neighbour dropped
     assert [n.doc_id for n in out.referenced_nodes] == ["ok", "ok"]
     assert out.explained_by_nodes == []             # restricted explainer dropped
-    # All four lists were routed through the single choke point.
-    assert enforcer.filter_nodes.call_count == 4
+    assert [n.doc_id for n in out.chain_nodes] == ["ok"]
+    # All five lists were routed through the single choke point.
+    assert enforcer.filter_nodes.call_count == 5
 
 
 def test_acl_filter_expanded_is_passthrough_when_acl_off():

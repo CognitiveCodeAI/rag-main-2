@@ -471,6 +471,18 @@ class TestQAValidation:
         )
         assert response.status_code == 422
 
+    def test_invalid_evidence_chain_mode(self):
+        """Unknown evidence-chain modes must be rejected at the API boundary."""
+        response = client.post(
+            "/v1/qa/ask",
+            json={
+                "doc_id": "test-doc-123",
+                "question": "Compare the amendment with the original agreement.",
+                "evidence_chain_mode": "truth_mode",
+            },
+        )
+        assert response.status_code == 422
+
 
 class TestQASuccess:
     """Test successful QA scenarios."""
@@ -561,6 +573,51 @@ class TestQASuccess:
         assert response.status_code == 200
         data = response.json()
         assert data["propagation_safety_mode"] is True
+
+    @patch("app.routes.qa.QARunner")
+    def test_evidence_chain_mode_and_audit_are_returned(self, mock_runner_class):
+        """The optional evidence-chain request and audit remain API-compatible."""
+        mock_runner = MagicMock()
+        mock_runner_class.return_value = mock_runner
+        mock_result = MagicMock()
+        mock_result.to_dict.return_value = {
+            "question": "Compare the amendment with the original agreement.",
+            "doc_id": "test-doc",
+            "seed_nodes": [],
+            "expanded_nodes": [],
+            "edge_traces": [],
+            "packed_context": "",
+            "context_node_ids": [],
+            "total_context_tokens": 0,
+            "answer": "Answer",
+            "citations": [],
+            "model_id": "mock-model",
+            "timing": {"evidence_chain_ms": 2.0},
+            "metadata": {},
+            "evidence_chain": {
+                "enabled": True,
+                "mode": "auto",
+                "applied": True,
+                "time_ms": 2.0,
+                "audit": {"scoring_version": "document-chain-v1"},
+            },
+            "success": True,
+            "error": None,
+        }
+        mock_runner.run.return_value = mock_result
+
+        response = client.post(
+            "/v1/qa/ask",
+            json={
+                "doc_id": "test-doc",
+                "question": "Compare the amendment with the original agreement.",
+                "evidence_chain_mode": "auto",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["evidence_chain"]["applied"] is True
+        assert mock_runner_class.call_args.kwargs["evidence_chain_mode"] == "auto"
 
 
 class TestQAErrorHandling:

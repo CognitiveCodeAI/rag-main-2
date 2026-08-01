@@ -6,7 +6,7 @@ Includes citations with doc_id, page_no, node_id, bbox.
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Set
 
 from app.db.graph_models import Node, NodeType
 from .expander import ExpandedContext
@@ -78,7 +78,11 @@ class PackedContext:
                 marker = f"[{citation.node_id}:{page_no}]"
 
                 # Keep auxiliary metadata outside [] so citation regexes stay simple.
-                meta_parts = [f"source={citation.source_type}"]
+                meta_parts = [
+                    f"node_id={citation.node_id}",
+                    f"page_no={page_no}",
+                    f"source={citation.source_type}",
+                ]
                 if citation.label:
                     meta_parts.append(f"label={citation.label}")
 
@@ -121,7 +125,9 @@ class ContextPacker:
     def pack(
         self,
         expanded: ExpandedContext,
-        query: Optional[str] = None
+        query: Optional[str] = None,
+        node_order: Optional[List[str]] = None,
+        allowed_node_ids: Optional[Set[str]] = None,
     ) -> PackedContext:
         """Pack expanded context into ordered blocks.
         
@@ -143,6 +149,36 @@ class ContextPacker:
         total_chars = 0
         max_chars = self.max_tokens * self.CHARS_PER_TOKEN
         
+        # Query-aware evidence chains provide an explicit, bounded evidence
+        # order.  This branch preserves canonical citations while avoiding
+        # accidental inclusion of unselected candidate nodes.
+        if node_order is not None:
+            nodes_by_id = {node.node_id: node for node in expanded.all_nodes}
+            for node_id in node_order:
+                if allowed_node_ids is not None and node_id not in allowed_node_ids:
+                    continue
+                node = nodes_by_id.get(node_id)
+                if node is None:
+                    continue
+                source_type = expanded.node_sources.get(node_id, "chain")
+                block = self._create_block(node, source_type, order)
+                if block and (self.include_empty or block.text.strip()):
+                    if total_chars + len(block.text) <= max_chars:
+                        blocks.append(block)
+                        total_chars += len(block.text)
+                        order += 1
+
+            tokens_estimate = total_chars // self.CHARS_PER_TOKEN
+            logger.info(
+                f"Packed {len(blocks)} chain-ordered blocks, ~{tokens_estimate} tokens "
+                f"(max={self.max_tokens})"
+            )
+            return PackedContext(
+                blocks=blocks,
+                total_chars=total_chars,
+                total_tokens_estimate=tokens_estimate,
+            )
+
         # 1. Seed chunks
         for node in self._sort_chunks(expanded.seed_nodes):
             block = self._create_block(node, 'seed', order)

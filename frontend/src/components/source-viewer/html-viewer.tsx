@@ -5,7 +5,7 @@ import { AlertCircle, CheckCircle2, FileText } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SourceMapResponse, Citation } from "@/lib/api";
 import { buildCanonicalHighlightRanges, getEvidenceFailureMessage } from "@/components/source-viewer/evidence";
 
@@ -102,7 +102,7 @@ export function HTMLSourceViewer({
     return <>{fragments}</>;
   }, [sourceMap?.canonical_text, citation]);
 
-  const resolveStatus = citation?.resolve_status || "unresolved";
+  const resolveStatus = citation?.evidence_status || citation?.resolve_status || "unavailable";
   const evidenceFailureMessage = getEvidenceFailureMessage(citation);
   const showEvidenceNotFound = Boolean(evidenceFailureMessage);
 
@@ -114,16 +114,19 @@ export function HTMLSourceViewer({
             <FileText className="h-4 w-4" />
             {title || "Document Source"}
           </SheetTitle>
+          <SheetDescription className="sr-only">
+            Canonical document source with citation evidence and verification status.
+          </SheetDescription>
         </SheetHeader>
 
         <div className="mt-4 flex items-center gap-2">
-          {resolveStatus === "exact" ? (
+          {resolveStatus === "verified" ? (
             <Badge variant="default" className="gap-1">
               <CheckCircle2 className="h-3 w-3" />
-              Verified
+              Verified Evidence
             </Badge>
-          ) : resolveStatus === "fuzzy" ? (
-            <Badge variant="secondary">Fuzzy Match</Badge>
+          ) : resolveStatus === "approximate" || resolveStatus === "exact" || resolveStatus === "fuzzy" ? (
+            <Badge variant="secondary">Approximate Source</Badge>
           ) : (
             <Badge variant="destructive" className="gap-1">
               <AlertCircle className="h-3 w-3" />

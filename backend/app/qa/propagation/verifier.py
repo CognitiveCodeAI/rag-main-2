@@ -7,6 +7,7 @@ Supports parallel execution for multiple sub-questions.
 import json
 import logging
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import List, Optional, Dict, Any
 
@@ -36,6 +37,7 @@ VERIFICATION RULES:
 2. You MUST cite at least 1 snippet if you provide an answer.
 3. If evidence is insufficient, set insufficient_evidence=true.
 4. Set confidence between 0.0 and 1.0.
+5. Every citation must include exact_quote copied verbatim from that snippet.
 
 OUTPUT FORMAT:
 Return ONLY valid JSON.
@@ -43,7 +45,7 @@ Return ONLY valid JSON.
 JSON SCHEMA:
 {{
   "answer": "your answer based on evidence",
-  "citations": [{{"node_id": "...", "page_no": 1, "label": "..."}}],
+  "citations": [{{"node_id": "...", "page_no": 1, "label": "...", "exact_quote": "verbatim supporting passage"}}],
   "confidence": 0.8,
   "insufficient_evidence": false,
   "conflict_notes": ""
@@ -167,8 +169,14 @@ class Verifier:
                 )
             
             # Build SubAnswer
-            citations = parsed.get("citations", [])
+            citations = self._validate_citations(
+                parsed.get("citations", []),
+                evidence_packet.snippets,
+            )
             conflict_notes = parsed.get("conflict_notes", "")
+            insufficient = bool(parsed.get("insufficient_evidence", False))
+            if parsed.get("answer") and not citations:
+                insufficient = True
             
             # Add conflict notes to conflicts list if present
             conflicts = evidence_packet.conflicts.copy()
@@ -181,10 +189,10 @@ class Verifier:
                 citations=citations,
                 confidence=parsed.get("confidence", 0.0),
                 conflicts=conflicts,
-                insufficient_evidence=parsed.get("insufficient_evidence", False),
+                insufficient_evidence=insufficient,
                 verifier_latency_ms=latency_ms
             )
-            
+
         except Exception as e:
             latency_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[Verifier] Error for {sub_question.id}: {e}")
@@ -197,6 +205,50 @@ class Verifier:
                 insufficient_evidence=True,
                 verifier_latency_ms=latency_ms
             )
+
+    @staticmethod
+    def _validate_citations(
+        citations: Any,
+        snippets: List[EvidenceSnippet],
+    ) -> List[Dict[str, Any]]:
+        """Keep only citations with a verbatim quote in the cited snippet."""
+        if not isinstance(citations, list):
+            return []
+        by_node = {snippet.node_id: snippet for snippet in snippets}
+        valid: List[Dict[str, Any]] = []
+        seen: set[tuple[str, int, str]] = set()
+
+        def normalize(value: str) -> str:
+            return " ".join(
+                unicodedata.normalize("NFKC", value or "").split()
+            ).casefold()
+
+        for citation in citations:
+            if not isinstance(citation, dict):
+                continue
+            node_id = str(citation.get("node_id") or "").strip()
+            exact_quote = str(citation.get("exact_quote") or "").strip()
+            snippet = by_node.get(node_id)
+            if (
+                snippet is None
+                or not exact_quote
+                or citation.get("page_no") != snippet.page_no
+                or normalize(exact_quote) not in normalize(snippet.text)
+            ):
+                continue
+            key = (node_id, snippet.page_no, exact_quote)
+            if key in seen:
+                continue
+            seen.add(key)
+            valid.append(
+                {
+                    "node_id": node_id,
+                    "page_no": snippet.page_no,
+                    "label": citation.get("label") or snippet.label,
+                    "exact_quote": exact_quote,
+                }
+            )
+        return valid
     
     def verify_all(
         self,

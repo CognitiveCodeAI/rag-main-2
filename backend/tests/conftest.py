@@ -16,6 +16,7 @@ INTEGRATION_TEST_FILES = {
     "test_acl_e2e.py",
     "test_all_connections.py",
     "test_embedding_e2e.py",
+    "test_evidence_chain_integration.py",
     "test_graph_e2e.py",
     "test_graph_rag.py",
     "test_ingestion_e2e.py",

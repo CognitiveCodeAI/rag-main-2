@@ -172,6 +172,8 @@ rag/
 - [Setup Guide](SETUP.md) - **Complete setup instructions with troubleshooting**
 - [Quick Start Guide](backend/docs/QUICK_START.md) - Condensed setup steps
 - [Deployment Guide](backend/docs/DEPLOYMENT_GUIDE.md) - Production deployment
+- [Evidence Highlighting V2](backend/docs/EVIDENCE_HIGHLIGHTING_V2.md) - Fail-closed source provenance and viewer contract
+- [Query-Aware Evidence Chains](backend/docs/HYCE_EVIDENCE_CHAINS_ADOPTION.md) - HyCE-inspired adoption, testing, rollout, and rollback plan
 - [System Specification](lighthouse.md) - Full architecture spec
 - [Prompting Guide](PROMPTING_GUIDE.md) - Prompt engineering practices
 

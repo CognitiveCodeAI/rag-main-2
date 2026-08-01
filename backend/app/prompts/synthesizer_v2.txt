@@ -15,12 +15,13 @@ You highlight any gaps, conflicts, or uncertainties from the verification proces
 
 <rules>
 1. Use ONLY facts from the verified sub-answers—never add external information.
-2. PRESERVE all citations exactly as provided (format: [node_id:PAGE] or [LABEL:PAGE]).
+2. Preserve the node_id, page_no, and exact_quote from every used grounded citation.
 3. If any sub-answer indicates "insufficient evidence", clearly reflect that gap.
 4. If sub-answers conflict, present both views with their citations.
 5. Weight sub-answers by their confidence scores when synthesizing.
 6. Structure the answer to directly address the original question.
 7. Do NOT invent, infer, or extrapolate beyond what sub-answers provide.
+8. Use stable [C1], [C2] citation IDs in the answer.
 </rules>
 
 <output_structure>
@@ -35,10 +36,10 @@ You highlight any gaps, conflicts, or uncertainties from the verification proces
 Return ONLY valid JSON. No markdown, no explanation, no code blocks.
 
 {{
-  "answer": "Your synthesized answer with all citations preserved inline",
+  "answer": "Your synthesized answer with stable [C1] citations inline",
   "citations": [
-    {{"node_id": "id1", "page_no": 5, "label": null}},
-    {{"node_id": "id2", "page_no": 12, "label": "Table 3"}}
+    {{"citation_id": "C1", "node_id": "id1", "page_no": 5, "label": null, "exact_quote": "verbatim quote preserved from sub-answer"}},
+    {{"citation_id": "C2", "node_id": "id2", "page_no": 12, "label": "Table 3", "exact_quote": "verbatim quote preserved from sub-answer"}}
   ],
   "conflicts_summary": "Brief summary of any conflicts between sub-answers, or empty string",
   "gaps_summary": "Brief summary of any information gaps, or empty string"
@@ -51,24 +52,27 @@ Return ONLY valid JSON. No markdown, no explanation, no code blocks.
 <question>What are the differences between the initial franchise fee and the ongoing royalty fee?</question>
 <sub_answers>
 [sq1] What is the initial franchise fee?
-Answer: The initial franchise fee is $45,000, payable upon signing [fee_1:5].
+Answer: The initial franchise fee is $45,000, payable upon signing.
+Grounded citations: [{{"node_id":"fee_1","page_no":5,"label":null,"exact_quote":"The initial franchise fee is $45,000, payable upon signing the Franchise Agreement."}}]
 Confidence: 1.0
 
 [sq2] What is the ongoing royalty fee?
-Answer: The royalty fee is 5% of Gross Sales, paid weekly [royalty_1:8].
+Answer: The royalty fee is 5% of Gross Sales, paid weekly.
+Grounded citations: [{{"node_id":"royalty_1","page_no":8,"label":null,"exact_quote":"Franchisees pay a continuing royalty fee of 5% of Gross Sales, due weekly."}}]
 Confidence: 1.0
 
 [sq3] Is the initial franchise fee refundable?
-Answer: No, the franchise fee is non-refundable [refund_1:6].
+Answer: No, the franchise fee is non-refundable.
+Grounded citations: [{{"node_id":"refund_1","page_no":6,"label":null,"exact_quote":"The initial franchise fee is fully earned upon payment and is non-refundable."}}]
 Confidence: 1.0
 </sub_answers>
 <output>
 {{
-  "answer": "The initial franchise fee and ongoing royalty fee differ in several ways. The initial franchise fee is a one-time payment of $45,000, due upon signing the Franchise Agreement [fee_1:5], and is non-refundable [refund_1:6]. In contrast, the ongoing royalty fee is a recurring payment of 5% of Gross Sales, paid weekly [royalty_1:8].",
+  "answer": "The initial franchise fee is a one-time payment of $45,000 due upon signing [C1], and it is non-refundable [C2]. The ongoing royalty fee is a recurring payment of 5% of Gross Sales, paid weekly [C3].",
   "citations": [
-    {{"node_id": "fee_1", "page_no": 5, "label": null}},
-    {{"node_id": "refund_1", "page_no": 6, "label": null}},
-    {{"node_id": "royalty_1", "page_no": 8, "label": null}}
+    {{"citation_id":"C1","node_id":"fee_1","page_no":5,"label":null,"exact_quote":"The initial franchise fee is $45,000, payable upon signing the Franchise Agreement."}},
+    {{"citation_id":"C2","node_id":"refund_1","page_no":6,"label":null,"exact_quote":"The initial franchise fee is fully earned upon payment and is non-refundable."}},
+    {{"citation_id":"C3","node_id":"royalty_1","page_no":8,"label":null,"exact_quote":"Franchisees pay a continuing royalty fee of 5% of Gross Sales, due weekly."}}
   ],
   "conflicts_summary": "",
   "gaps_summary": ""
@@ -80,24 +84,27 @@ Confidence: 1.0
 <question>How much does it cost to open a franchise and what training is provided?</question>
 <sub_answers>
 [sq1] What is the total estimated initial investment?
-Answer: The estimated initial investment ranges from $125,000 to $190,000, as detailed in Table 5 [Table 5:31].
+Answer: The estimated initial investment ranges from $125,000 to $190,000.
+Grounded citations: [{{"node_id":"table_5","page_no":31,"label":"Table 5","exact_quote":"Total Estimated Initial Investment | $125,000 | $190,000"}}]
 Confidence: 1.0
 
 [sq2] What training is provided?
-Answer: Initial training consists of 2 weeks at Dallas headquarters [train_1:15], covering operations, marketing, and customer service [train_2:16].
+Answer: Initial training consists of 2 weeks at Dallas headquarters, covering operations, marketing, and customer service.
+Grounded citations: [{{"node_id":"train_1","page_no":15,"label":null,"exact_quote":"Initial training consists of 2 weeks at our Dallas headquarters."}},{{"node_id":"train_2","page_no":16,"label":null,"exact_quote":"Training covers operations, marketing, and customer service."}}]
 Confidence: 0.9
 
 [sq3] What is the duration and location of training?
-Answer: Training is 2 weeks at the Dallas headquarters [train_1:15].
+Answer: Training is 2 weeks at the Dallas headquarters.
+Grounded citations: [{{"node_id":"train_1","page_no":15,"label":null,"exact_quote":"Initial training consists of 2 weeks at our Dallas headquarters."}}]
 Confidence: 1.0
 </sub_answers>
 <output>
 {{
-  "answer": "Opening a franchise requires an estimated initial investment of $125,000 to $190,000 [Table 5:31]. Training consists of a 2-week program at the company's Dallas headquarters [train_1:15], which covers operations, marketing, and customer service [train_2:16].",
+  "answer": "Opening a franchise requires an estimated initial investment of $125,000 to $190,000 [C1]. Training consists of a 2-week program at the Dallas headquarters [C2] covering operations, marketing, and customer service [C3].",
   "citations": [
-    {{"node_id": "Table 5", "page_no": 31, "label": "Table 5"}},
-    {{"node_id": "train_1", "page_no": 15, "label": null}},
-    {{"node_id": "train_2", "page_no": 16, "label": null}}
+    {{"citation_id":"C1","node_id":"table_5","page_no":31,"label":"Table 5","exact_quote":"Total Estimated Initial Investment | $125,000 | $190,000"}},
+    {{"citation_id":"C2","node_id":"train_1","page_no":15,"label":null,"exact_quote":"Initial training consists of 2 weeks at our Dallas headquarters."}},
+    {{"citation_id":"C3","node_id":"train_2","page_no":16,"label":null,"exact_quote":"Training covers operations, marketing, and customer service."}}
   ],
   "conflicts_summary": "",
   "gaps_summary": ""
@@ -109,7 +116,8 @@ Confidence: 1.0
 <question>What is the territory size and can it be changed?</question>
 <sub_answers>
 [sq1] What is the territory size?
-Answer: Territories have a minimum population of 50,000 [territory_1:12].
+Answer: Territories have a minimum population of 50,000.
+Grounded citations: [{{"node_id":"territory_1","page_no":12,"label":null,"exact_quote":"Each franchisee receives an exclusive territory with a minimum population of 50,000."}}]
 Confidence: 0.8
 Conflict: Page 45 mentions 30,000-75,000 range, but primary document specifies 50,000 minimum.
 
@@ -120,9 +128,9 @@ Insufficient: true
 </sub_answers>
 <output>
 {{
-  "answer": "Each franchisee receives an exclusive territory with a minimum population of 50,000 [territory_1:12]. However, I could not find information in the provided documents about whether the territory can be changed after signing the agreement.",
+  "answer": "Each franchisee receives an exclusive territory with a minimum population of 50,000 [C1]. However, I could not find information in the provided documents about whether the territory can be changed after signing the agreement.",
   "citations": [
-    {{"node_id": "territory_1", "page_no": 12, "label": null}}
+    {{"citation_id":"C1","node_id":"territory_1","page_no":12,"label":null,"exact_quote":"Each franchisee receives an exclusive territory with a minimum population of 50,000."}}
   ],
   "conflicts_summary": "Some inconsistency exists in territory size specifications—one section mentions a 30,000-75,000 range while the primary disclosure specifies a 50,000 minimum.",
   "gaps_summary": "No information found regarding whether territories can be modified after the initial agreement."

@@ -11,6 +11,7 @@ Captures bounding box information for citation anchoring:
 
 import re
 import logging
+import unicodedata
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Any, TYPE_CHECKING
 
@@ -520,6 +521,8 @@ class PageBoundedChunker:
                 "width": page_data.width,
                 "height": page_data.height
             }
+            meta["page_rotation"] = int(getattr(page_data, "rotation", 0) or 0)
+            meta["coordinate_system"] = "normalized_top_left"
 
             # Preserve docling structural provenance where available.
             if getattr(page_data, "meta", None):
@@ -527,8 +530,18 @@ class PageBoundedChunker:
                     if page_data.meta.get(key) is not None:
                         meta[key] = page_data.meta.get(key)
             
-            # Compute merged bbox from matching text spans
-            bbox = self._compute_chunk_bbox(text_plain, page_data)
+            # Retain ordered word provenance. The legacy merged bbox remains
+            # available for approximate navigation, but V2 evidence is resolved
+            # from source_spans into precise line rectangles.
+            source_spans, provenance_status = self._compute_chunk_source_spans(
+                text_plain,
+                page_data,
+            )
+            meta["source_spans"] = source_spans
+            meta["source_span_resolution"] = provenance_status
+            meta["evidence_schema_version"] = "2.0"
+
+            bbox = self._compute_chunk_bbox(text_plain, page_data, source_spans=source_spans)
             if bbox:
                 meta["bbox"] = bbox
         
@@ -559,7 +572,9 @@ class PageBoundedChunker:
     def _compute_chunk_bbox(
         self,
         chunk_text: str,
-        page_data: Any
+        page_data: Any,
+        *,
+        source_spans: Optional[List[dict]] = None,
     ) -> Optional[dict]:
         """Compute merged bounding box for chunk text from page spans.
         
@@ -576,7 +591,22 @@ class PageBoundedChunker:
         if not page_data or not hasattr(page_data, 'text_spans') or not page_data.text_spans:
             return None
         
-        # Normalize chunk text for matching
+        if source_spans:
+            point_boxes = [
+                span.get("bbox")
+                for span in source_spans
+                if isinstance(span.get("bbox"), dict)
+            ]
+            if point_boxes:
+                return {
+                    "x0": round(min(box["x0"] for box in point_boxes), 2),
+                    "y0": round(min(box["y0"] for box in point_boxes), 2),
+                    "x1": round(max(box["x1"] for box in point_boxes), 2),
+                    "y1": round(max(box["y1"] for box in point_boxes), 2),
+                }
+
+        # Legacy approximate fallback for documents ingested without V2 word
+        # provenance.
         chunk_text_normalized = ' '.join(chunk_text.split()).lower()
         
         # Find spans that appear in the chunk text
@@ -613,3 +643,89 @@ class PageBoundedChunker:
             "x1": round(x1, 2),
             "y1": round(y1, 2)
         }
+
+    @staticmethod
+    def _normalize_provenance_text(value: str) -> str:
+        return " ".join(unicodedata.normalize("NFKC", value or "").split()).casefold()
+
+    @classmethod
+    def _compute_chunk_source_spans(
+        cls,
+        chunk_text: str,
+        page_data: Any,
+    ) -> Tuple[List[dict], str]:
+        """Resolve a chunk to one unique contiguous sequence of source words.
+
+        Ambiguous and inexact matches deliberately return no verifiable spans.
+        That makes downstream evidence fail closed instead of highlighting a
+        plausible-looking but potentially incorrect region.
+        """
+        spans = list(getattr(page_data, "text_spans", None) or [])
+        if not spans:
+            return [], "missing_source_words"
+
+        ordered = sorted(spans, key=lambda item: int(getattr(item, "order", 0) or 0))
+        stream_parts: List[str] = []
+        ranges: List[Tuple[int, int, Any]] = []
+        cursor = 0
+        for span in ordered:
+            normalized = cls._normalize_provenance_text(getattr(span, "text", ""))
+            if not normalized:
+                continue
+            if stream_parts:
+                stream_parts.append(" ")
+                cursor += 1
+            start = cursor
+            stream_parts.append(normalized)
+            cursor += len(normalized)
+            ranges.append((start, cursor, span))
+
+        page_stream = "".join(stream_parts)
+        needle = cls._normalize_provenance_text(chunk_text)
+        if not page_stream or not needle:
+            return [], "empty_normalized_text"
+
+        occurrences: List[int] = []
+        search_from = 0
+        while True:
+            idx = page_stream.find(needle, search_from)
+            if idx < 0:
+                break
+            occurrences.append(idx)
+            search_from = idx + max(1, len(needle))
+            if len(occurrences) > 1:
+                break
+
+        if not occurrences:
+            return [], "chunk_not_exact_in_source_words"
+        if len(occurrences) > 1:
+            return [], "ambiguous_chunk_in_source_words"
+
+        match_start = occurrences[0]
+        match_end = match_start + len(needle)
+        matched: List[dict] = []
+        for start, end, span in ranges:
+            if start >= match_end or end <= match_start:
+                continue
+            payload = span.to_dict() if hasattr(span, "to_dict") else {
+                "text": getattr(span, "text", ""),
+                "bbox": {
+                    "x0": span.bbox[0],
+                    "y0": span.bbox[1],
+                    "x1": span.bbox[2],
+                    "y1": span.bbox[3],
+                },
+            }
+            payload["page_no"] = int(page_data.page_no)
+            matched.append(payload)
+
+        if not matched:
+            return [], "chunk_match_has_no_source_words"
+        if not all(
+            span.get("verifiable") is True
+            and isinstance(span.get("normalized_bbox"), dict)
+            and span.get("coordinate_system") == "pdf_points_top_left"
+            for span in matched
+        ):
+            return matched, "approximate_source_provenance"
+        return matched, "exact_source_words"

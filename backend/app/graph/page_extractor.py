@@ -7,6 +7,7 @@ falling back to DeepSeek-OCR via Ollama when text quality is low.
 import io
 import base64
 import logging
+import unicodedata
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from pathlib import Path
@@ -20,14 +21,37 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TextSpan:
-    """A text span with bounding box information."""
+    """An ordered source word with display-oriented provenance.
+
+    ``bbox`` uses page points with a top-left origin after page rotation.
+    ``normalized_bbox`` uses the same orientation with values in 0..1 so the
+    browser never has to mix PyMuPDF coordinates with PDF.js user space.
+    """
     text: str
     bbox: tuple  # (x0, y0, x1, y1) in PDF points
+    span_id: str = ""
+    order: int = 0
+    block_no: Optional[int] = None
+    line_no: Optional[int] = None
+    word_no: Optional[int] = None
+    normalized_bbox: Optional[dict] = None
+    coordinate_system: str = "pdf_points_top_left"
+    extraction_source: str = "native_pdf"
+    verifiable: bool = True
     
     def to_dict(self) -> dict:
         return {
+            'span_id': self.span_id,
+            'order': self.order,
             'text': self.text,
-            'bbox': {'x0': self.bbox[0], 'y0': self.bbox[1], 'x1': self.bbox[2], 'y1': self.bbox[3]}
+            'bbox': {'x0': self.bbox[0], 'y0': self.bbox[1], 'x1': self.bbox[2], 'y1': self.bbox[3]},
+            'normalized_bbox': self.normalized_bbox,
+            'block_no': self.block_no,
+            'line_no': self.line_no,
+            'word_no': self.word_no,
+            'coordinate_system': self.coordinate_system,
+            'extraction_source': self.extraction_source,
+            'verifiable': self.verifiable,
         }
 
 
@@ -42,6 +66,7 @@ class PageData:
     used_ocr: bool
     width: float
     height: float
+    rotation: int = 0
     text_spans: List['TextSpan'] = field(default_factory=list)  # Text with bbox info
     meta: dict = field(default_factory=dict)
 
@@ -241,11 +266,19 @@ class PageExtractor:
             used_ocr=used_ocr,
             width=width,
             height=height,
+            rotation=int(page.rotation or 0),
             text_spans=text_spans,
             meta={
                 "native_char_count": len(native_text),
                 "final_char_count": len(text_plain),
                 "text_span_count": len(text_spans),
+                "coordinate_system": "normalized_top_left",
+                "crop_box": {
+                    "x0": float(page.cropbox.x0),
+                    "y0": float(page.cropbox.y0),
+                    "x1": float(page.cropbox.x1),
+                    "y1": float(page.cropbox.y1),
+                },
             }
         )
 
@@ -282,10 +315,11 @@ class PageExtractor:
         )
     
     def _extract_text_spans(self, page: fitz.Page) -> List[TextSpan]:
-        """Extract text spans with bounding box information.
-        
-        Uses PyMuPDF's get_text('dict') to get structured text with coordinates.
-        Each span represents a continuous text segment with the same formatting.
+        """Extract ordered words with normalized display rectangles.
+
+        Word-level provenance lets the verifier return only the lines supporting
+        a claim. Font spans and merged chunk boxes are too coarse for legal or
+        clinical review.
         
         Args:
             page: PyMuPDF page object
@@ -293,29 +327,50 @@ class PageExtractor:
         Returns:
             List of TextSpan objects with text and bbox
         """
-        spans = []
+        spans: List[TextSpan] = []
         
         try:
-            # Get structured text data with bounding boxes
-            text_dict = page.get_text('dict', flags=fitz.TEXT_PRESERVE_WHITESPACE)
-            
-            for block in text_dict.get('blocks', []):
-                # Skip image blocks
-                if block.get('type') != 0:  # type 0 = text block
+            words = page.get_text("words", sort=True)
+            display_width = max(float(page.rect.width), 1.0)
+            display_height = max(float(page.rect.height), 1.0)
+            rotation_matrix = page.rotation_matrix
+
+            for order, word in enumerate(words):
+                if len(word) < 8:
                     continue
-                
-                for line in block.get('lines', []):
-                    for span in line.get('spans', []):
-                        text = span.get('text', '').strip()
-                        bbox = span.get('bbox')
-                        
-                        if text and bbox:
-                            spans.append(TextSpan(
-                                text=text,
-                                bbox=tuple(bbox)  # (x0, y0, x1, y1)
-                            ))
+                x0, y0, x1, y1, text, block_no, line_no, word_no = word[:8]
+                text = unicodedata.normalize("NFKC", str(text)).strip()
+                if not text:
+                    continue
+
+                source_rect = fitz.Rect(float(x0), float(y0), float(x1), float(y1))
+                display_rect = source_rect * rotation_matrix if page.rotation else source_rect
+                display_rect.normalize()
+                normalized_bbox = {
+                    "x0": max(0.0, min(1.0, display_rect.x0 / display_width)),
+                    "y0": max(0.0, min(1.0, display_rect.y0 / display_height)),
+                    "x1": max(0.0, min(1.0, display_rect.x1 / display_width)),
+                    "y1": max(0.0, min(1.0, display_rect.y1 / display_height)),
+                }
+                spans.append(
+                    TextSpan(
+                        text=text,
+                        bbox=(
+                            float(display_rect.x0),
+                            float(display_rect.y0),
+                            float(display_rect.x1),
+                            float(display_rect.y1),
+                        ),
+                        span_id=f"p{page.number + 1}:w{order}",
+                        order=order,
+                        block_no=int(block_no),
+                        line_no=int(line_no),
+                        word_no=int(word_no),
+                        normalized_bbox=normalized_bbox,
+                    )
+                )
         except Exception as e:
-            logger.warning(f"Failed to extract text spans with bbox: {e}")
+            logger.warning(f"Failed to extract word provenance with bbox: {e}")
         
         return spans
     

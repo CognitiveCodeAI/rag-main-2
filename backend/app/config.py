@@ -115,6 +115,19 @@ class Settings(BaseSettings):
     # Cross-format selector highlighting
     enable_cross_format_highlighting: bool = True
 
+    # Query-aware evidence chains (HyCE-inspired online retrieval layer).
+    # Feature-gated for controlled A/B rollout; scores rank evidence only and
+    # never set citation/highlight verification status.
+    evidence_chain_enabled: bool = False
+    evidence_chain_mode: str = "auto"  # off | auto | on
+    evidence_chain_route_threshold: float = 0.55
+    evidence_chain_max_hops: int = 3
+    evidence_chain_max_nodes: int = 30
+    evidence_chain_max_selected_nodes: int = 15
+    evidence_chain_max_chains: int = 6
+    evidence_chain_propagation_steps: int = 10
+    evidence_chain_restart_probability: float = 0.35
+
     # Access Control Layer (ACL)
     # When enabled, enforces tenant-scoped ABAC/RBAC at every pipeline stage.
     # Identity resolved from headers: X-Tenant-Id, X-User-Id, X-Roles, X-Groups
@@ -147,6 +160,34 @@ class Settings(BaseSettings):
         valid = {"opaque", "explicit"}
         if v not in valid:
             raise ValueError(f"acl_disclosure_mode must be one of {valid}, got '{v}'")
+        return v
+
+    @field_validator("evidence_chain_mode")
+    @classmethod
+    def validate_evidence_chain_mode(cls, v: str) -> str:
+        valid = {"off", "auto", "on"}
+        if v not in valid:
+            raise ValueError(f"evidence_chain_mode must be one of {valid}, got '{v}'")
+        return v
+
+    @field_validator("evidence_chain_route_threshold", "evidence_chain_restart_probability")
+    @classmethod
+    def validate_evidence_chain_probability(cls, v: float) -> float:
+        if not 0.0 < v <= 1.0:
+            raise ValueError("evidence-chain probabilities must be in (0, 1]")
+        return v
+
+    @field_validator(
+        "evidence_chain_max_hops",
+        "evidence_chain_max_nodes",
+        "evidence_chain_max_selected_nodes",
+        "evidence_chain_max_chains",
+        "evidence_chain_propagation_steps",
+    )
+    @classmethod
+    def validate_evidence_chain_positive_ints(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("evidence-chain limits must be positive")
         return v
 
     @field_validator("jwt_algorithms")
@@ -261,6 +302,10 @@ class Settings(BaseSettings):
         logger.info(f"  OpenAI API Key: {'configured' if self.openai_api_key else 'NOT SET (required for embeddings)'}")
         logger.info(f"  Docling: enabled={self.docling_enabled_default}, mode={self.docling_mode}")
         logger.info(f"  Cross-format highlighting: enabled={self.enable_cross_format_highlighting}")
+        logger.info(
+            f"  Evidence chains: enabled={self.evidence_chain_enabled}, "
+            f"mode={self.evidence_chain_mode}"
+        )
         logger.info(f"  ACL: enabled={self.acl_enabled}, strict={self.acl_strict_mode}, disclosure={self.acl_disclosure_mode}")
         if not self.acl_enabled:
             logger.warning(

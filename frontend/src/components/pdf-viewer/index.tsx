@@ -7,20 +7,21 @@
  * Uses pdfjs-dist for PDF rendering with custom highlight overlays.
  * 
  * Highlight rendering:
- * 1. Verified bbox overlays
- * 2. Verified exact quote overlays
+ * 1. Server-verified normalized source rectangles
+ * 2. Legacy locators, when explicitly identified as non-verified
  */
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { normalizedRectToViewport } from "@/components/pdf-viewer/geometry";
 import {
   ChevronLeft, 
   ChevronRight, 
@@ -64,6 +65,21 @@ export interface CitationHighlight {
         type: "text_offsets";
         start: number;
         end: number;
+      }
+    | {
+        type: "rects";
+        coordinate_system: "normalized_top_left";
+        rects: Array<{
+          x0: number;
+          y0: number;
+          x1: number;
+          y1: number;
+        }>;
+        page_size?: {
+          width: number;
+          height: number;
+        };
+        page_rotation?: 0 | 90 | 180 | 270;
       };
   quote_text: string;
   confidence?: number;
@@ -188,6 +204,15 @@ export function PDFViewer({
         height: Math.abs(vy1 - vy0),
       };
     },
+    [],
+  );
+
+  const normalizedToViewportRect = useCallback(
+    (
+      viewport: pdfjsLib.PageViewport,
+      rect: { x0: number; y0: number; x1: number; y1: number },
+    ): TextHighlightRect =>
+      normalizedRectToViewport(rect, viewport.width, viewport.height),
     [],
   );
 
@@ -350,7 +375,11 @@ export function PDFViewer({
         const nextBboxHighlights: TextHighlightRect[] = [];
 
         for (const item of highlightsForCurrentPage) {
-          if (item.locator.type === "bbox") {
+          if (item.locator.type === "rects") {
+            nextBboxHighlights.push(
+              ...item.locator.rects.map((rect) => normalizedToViewportRect(viewport, rect)),
+            );
+          } else if (item.locator.type === "bbox") {
             nextBboxHighlights.push(toViewportRect(viewport, item.locator.bbox));
           } else if (item.quote_text) {
             const exactRects = await findExactQuoteHighlights(page, viewport, item.quote_text);
@@ -374,7 +403,15 @@ export function PDFViewer({
     };
 
     renderPage();
-  }, [pdf, currentPage, scale, highlightsForCurrentPage, findExactQuoteHighlights, toViewportRect]);
+  }, [
+    pdf,
+    currentPage,
+    scale,
+    highlightsForCurrentPage,
+    findExactQuoteHighlights,
+    normalizedToViewportRect,
+    toViewportRect,
+  ]);
   
   // Navigation handlers
   const goToFirstPage = () => { setCurrentPage(1); setPageInput("1"); };
@@ -408,6 +445,7 @@ export function PDFViewer({
   const resetZoom = () => setScale(1.0);
   
   const hasHighlights = highlights.length > 0;
+  const hasDirectRectLocator = highlights.some((item) => item.locator.type === "rects");
   const hasBboxLocator = highlights.some((item) => item.locator.type === "bbox");
   const visibleFailureMessage = !hasHighlights
     ? (evidenceFailureMessage || null)
@@ -462,11 +500,20 @@ export function PDFViewer({
   const getHighlightBadge = () => {
     if (!hasHighlights) return null;
 
+    if (hasDirectRectLocator) {
+      return (
+        <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30">
+          <Target className="h-3 w-3 mr-1" />
+          Verified Evidence
+        </Badge>
+      );
+    }
+
     if (hasBboxLocator) {
       return (
         <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/30">
           <Target className="h-3 w-3 mr-1" />
-          Verified (BBox)
+          Approximate Location
         </Badge>
       );
     }
@@ -475,7 +522,7 @@ export function PDFViewer({
       return (
         <Badge variant="secondary" className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/30">
           <Target className="h-3 w-3 mr-1" />
-          Verified (Text)
+          Canonical Text Match
         </Badge>
       );
     }
@@ -502,6 +549,9 @@ export function PDFViewer({
       >
         {/* Header */}
         <SheetHeader className="px-4 py-3 border-b bg-muted/30 flex-shrink-0">
+          <SheetDescription className="sr-only">
+            Original PDF source with independently verified evidence highlights.
+          </SheetDescription>
           <div className="flex items-center justify-between gap-4">
             <SheetTitle className="flex items-center gap-2 text-base font-semibold truncate">
               <FileText className="h-5 w-5 flex-shrink-0 text-primary" />
