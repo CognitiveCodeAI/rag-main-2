@@ -1,0 +1,72 @@
+name: Bug report
+description: Report reproducible behavior that is not working as expected
+title: "[bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve NPR. Do not include client documents, credentials, personal data, protected health information, or privileged legal material.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest safe reproduction you can.
+      placeholder: |
+        1. Start the stack with ...
+        2. Upload or query a synthetic document ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Ingestion or parsing
+        - Retrieval or ranking
+        - Answer generation or citations
+        - Evidence highlighting
+        - ACL, authentication, or tenant isolation
+        - Frontend
+        - Infrastructure or deployment
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python, Node, browser, deployment type, and relevant service versions.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Redact secrets and sensitive document content.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed secrets, private documents, and personal or regulated data.
+          required: true
+        - label: This is not a security vulnerability. Security reports belong in a private advisory.
+          required: true

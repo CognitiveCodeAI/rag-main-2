@@ -144,5 +144,10 @@ test docs/
 openapi.json
 nul
 
+# Local evaluation, browser, and research artifacts
+/output/
+/tmp/
+/.playwright-cli/
+
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json

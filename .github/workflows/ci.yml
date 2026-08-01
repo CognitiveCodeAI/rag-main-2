@@ -4,14 +4,20 @@ on:
   push:
     branches: ["main", "master"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-quality:
     name: Backend Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -48,6 +54,7 @@ jobs:
   backend-integration:
     name: Backend Integration (security gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     # Pin the connection config to the docker-compose defaults so the job does
     # not depend on a backend/.env (absent in CI) or any ambient runner env.
@@ -96,7 +103,8 @@ jobs:
       - name: Initialize databases and storage
         working-directory: backend
         run: |
-          export PATH="$(python -c 'import sys,os;print(os.path.dirname(sys.executable))'):$PATH"
+          python_bin_dir="$(python -c 'import sys,os;print(os.path.dirname(sys.executable))')"
+          export PATH="${python_bin_dir}:$PATH"
           python -m scripts.setup.setup_postgres
           python -m scripts.setup.setup_minio
           python -m scripts.setup.setup_milvus
@@ -125,6 +133,7 @@ jobs:
   frontend-quality:
     name: Frontend Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -160,6 +169,7 @@ jobs:
   dependency-audit:
     name: Dependency Audit (non-blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
 
     steps:

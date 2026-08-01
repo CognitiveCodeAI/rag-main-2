@@ -10,6 +10,7 @@ Use this checklist before every public release. A release is ready only when all
 - [ ] No secrets, local artifacts, or proprietary files are included.
 - [ ] Security disclosure process exists and is documented.
 - [ ] Changelog has a clear release summary.
+- [ ] Protected-main rules, secret scanning, push protection, and Dependabot security updates are enabled.
 
 ## 1. Documentation Quality
 
@@ -50,9 +51,12 @@ Acceptance evidence:
 Owner: Maintainer
 
 - [ ] Backend unit tests pass:
-  - [ ] `cd backend && pytest tests/test_acl_unit.py -q`
+  - [ ] `cd backend && venv/bin/python -m pytest -q`
+- [ ] Security-critical infrastructure integration tests pass in CI.
 - [ ] Frontend lint and build pass:
+  - [ ] `cd frontend && npm test`
   - [ ] `cd frontend && npm run lint`
+  - [ ] `cd frontend && npx tsc --noEmit`
   - [ ] `cd frontend && npm run build`
 - [ ] Complex logic has concise comments explaining intent (not obvious line-by-line commentary).
 - [ ] Dead code, TODO placeholders, and debug prints are removed or converted to tracked issues.
@@ -80,6 +84,8 @@ Acceptance evidence:
 Owner: Maintainer
 
 - [ ] `CONTRIBUTING.md` explains setup, coding standards, and PR process.
+- [ ] `CODE_OF_CONDUCT.md`, `SUPPORT.md`, `MAINTAINING.md`, and `RELEASING.md` are current.
+- [ ] Issue forms, pull-request template, and CODEOWNERS resolve correctly on GitHub.
 - [ ] `CHANGELOG.md` includes release notes in a consistent format.
 - [ ] Clear issue and PR descriptions used for all release changes.
 - [ ] Version/tag strategy decided before publishing (for example: `v1.0.0`).

@@ -1,0 +1,10 @@
+# Default reviewer for repository changes.
+* @CognitiveCodeAI
+
+# High-assurance areas.
+/backend/app/acl/ @CognitiveCodeAI
+/backend/app/auth/ @CognitiveCodeAI
+/backend/app/qa/ @CognitiveCodeAI
+/backend/app/services/highlighting.py @CognitiveCodeAI
+/backend/alembic/ @CognitiveCodeAI
+/.github/ @CognitiveCodeAI

@@ -1,10 +1,40 @@
-# NPR - Near-Perfect RAG
+<div align="center">
 
-A production-grade Retrieval-Augmented Generation (RAG) system designed for high-accuracy document question answering with evidence-based citations.
+<img src="frontend/public/logo.png" alt="Cognitive Code logo" width="96" />
 
-Developed by Larry Stewart at Cognitive Code ([cognitiveCode.ai](https://cognitiveCode.ai)).
+# NPR — Near-Perfect RAG
 
-## Overview
+**Auditable document question answering with evidence-first retrieval, explicit citations, and reproducible traces.**
+
+Built by [Larry Stewart](https://github.com/LarryStewart2022) at [Cognitive Code](https://cognitivecode.ai).
+
+<p>
+  <a href="https://github.com/CognitiveCodeAI/rag-main-2/actions/workflows/ci.yml"><img src="https://github.com/CognitiveCodeAI/rag-main-2/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License" /></a>
+  <img src="https://img.shields.io/badge/Python-3.12-3776ab" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/Next.js-16-000000" alt="Next.js 16" />
+  <img src="https://img.shields.io/badge/status-controlled_pilot-f59e0b" alt="Controlled pilot status" />
+</p>
+
+<p>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#testing">Testing</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="https://github.com/CognitiveCodeAI/rag-main-2/discussions">Discussions</a>
+</p>
+
+</div>
+
+> [!IMPORTANT]
+> **Project status: controlled pilot.** NPR has strong automated test and provenance foundations, but it is not represented as broadly production-ready for legal, clinical, or other high-stakes use. Production promotion requires deployment-specific security review, ACL enablement, representative domain validation, and operational load testing.
+
+<p align="center">
+  <img src="app-screenshot.png" alt="NPR dashboard showing document ingestion, chat, search, service health, and vector collections" width="820" />
+</p>
+
+## Why NPR
 
 NPR (Near-Perfect RAG) is a full-stack RAG system that retrieves relevant document evidence and generates answers with explicit citations. The system prioritizes:
 
@@ -44,25 +74,25 @@ NPR (Near-Perfect RAG) is a full-stack RAG system that retrieves relevant docume
 
 | Component | Technology |
 |-----------|------------|
-| Backend API | FastAPI (Python 3.11+) |
-| Frontend | Next.js |
+| Backend API | FastAPI on Python 3.12 |
+| Frontend | Next.js 16 + React 19 |
 | Vector Database | Milvus |
 | Relational DB | PostgreSQL |
 | Object Storage | MinIO (S3-compatible) |
 | Task Queue | Celery + Redis |
 | Embeddings | OpenAI text-embedding-3-large |
-| LLM (Chat) | Configurable (Ollama/OpenAI) |
+| LLM (Chat) | OpenAI-backed grounded answer generation |
 
 ## Quick Start
 
 ```bash
-git clone <repository-url> rag-system
-cd rag-system
+git clone https://github.com/CognitiveCodeAI/rag-main-2.git
+cd rag-main-2
 ./dev init
 ./dev up
 ```
 
-`./dev init` validates prerequisites (Docker, Python 3.10+, Node 18+, npm) and creates/syncs `backend/.env` from `backend/.env.example` without overwriting existing values.
+`./dev init` validates prerequisites (Docker, Python 3.12, Node 20.9+, and npm) and creates or synchronizes `backend/.env` from `backend/.env.example` without overwriting existing values.
 
 `./dev up` runs first-time bootstrap when needed, starts local infrastructure, then starts backend, frontend, and celery.
 
@@ -174,6 +204,10 @@ rag/
 - [Deployment Guide](backend/docs/DEPLOYMENT_GUIDE.md) - Production deployment
 - [System Specification](lighthouse.md) - Full architecture spec
 - [Prompting Guide](PROMPTING_GUIDE.md) - Prompt engineering practices
+- [Security Policy](SECURITY.md) - Private vulnerability reporting and scope
+- [Support](SUPPORT.md) - Questions, issues, and commercial support
+- [Maintainer Guide](MAINTAINING.md) - Review, triage, and repository stewardship
+- [Release Guide](RELEASING.md) - Versioning and release procedure
 
 ## Configuration
 
@@ -191,16 +225,19 @@ Key settings:
 ## Testing
 
 ```bash
+# Preferred repository-wide test entry point
+./dev test
+
+# Backend directly
 cd backend
+venv/bin/python -m pytest -q
 
-# Run all tests
-pytest
-
-# Run specific test suite
-pytest tests/qa/ -v
-
-# Run with coverage
-pytest --cov=app tests/
+# Frontend directly
+cd ../frontend
+npm test
+npm run lint
+npx tsc --noEmit
+npm run build
 ```
 
 ## Development
@@ -228,10 +265,16 @@ cd backend
 python tests/eval/update_benchmark_contract.py
 ```
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and use the repository's issue and pull-request templates. Questions belong in [GitHub Discussions](https://github.com/CognitiveCodeAI/rag-main-2/discussions); vulnerabilities belong in a [private security advisory](https://github.com/CognitiveCodeAI/rag-main-2/security/advisories/new).
+
+## License
+
+NPR is available under the [MIT License](LICENSE).
+
+---
+
+<div align="center">
+  <sub>Built by <a href="https://cognitivecode.ai">Cognitive Code</a> · <a href="SUPPORT.md">Support</a> · <a href="SECURITY.md">Security</a> · <a href="RELEASING.md">Releases</a></sub>
+</div>
