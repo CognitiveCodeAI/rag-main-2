@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose an improvement grounded in a concrete user need
+title: "[idea]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the workflow, user, and current limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior rather than only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Note workarounds or designs you evaluated.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Ingestion or parsing
+        - Retrieval or ranking
+        - Answer generation or citations
+        - Evidence highlighting
+        - ACL, authentication, or tenant isolation
+        - Frontend
+        - Infrastructure or operations
+        - Documentation or developer experience
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety, privacy, and compatibility considerations
+      description: Identify effects on sensitive documents, permissions, provenance, APIs, migrations, or existing deployments.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Success criteria
+      description: Explain how this feature should be tested or measured.
+    validations:
+      required: true

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and usage help
+    url: https://github.com/CognitiveCodeAI/rag-main-2/discussions
+    about: Use Discussions for setup help, architecture questions, and show-and-tell.
+  - name: Report a security vulnerability privately
+    url: https://github.com/CognitiveCodeAI/rag-main-2/security/advisories/new
+    about: Do not disclose vulnerabilities in a public issue.
+  - name: Commercial support
+    url: https://cognitivecode.ai
+    about: Contact Cognitive Code for implementation and commercial support.
