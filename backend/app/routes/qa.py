@@ -48,6 +48,13 @@ class AskRequest(BaseModel):
         default=None,
         description="Configuration for propagation_safety mode (optional)"
     )
+    evidence_chain_mode: Optional[Literal["off", "auto", "on"]] = Field(
+        default=None,
+        description=(
+            "Query-aware evidence-chain routing. The server feature flag remains authoritative; "
+            "clients may disable it or choose the configured routing behavior."
+        ),
+    )
 
 
 class AskResponse(BaseModel):
@@ -92,6 +99,9 @@ class AskResponse(BaseModel):
     # Propagation Safety Mode (TRACK-inspired)
     propagation_safety_mode: bool = False
     propagation_safety_audit: Optional[dict] = None
+
+    # Query-aware evidence-chain audit (relevance, never factual confidence)
+    evidence_chain: Optional[dict] = None
     
     # LLM Query Rewriting (for multi-turn conversations)
     original_question: Optional[str] = None  # Original query before rewriting
@@ -147,6 +157,7 @@ def ask_question(
             max_context_tokens=runtime.max_context_tokens,
             enable_rerank=runtime.enable_reranking,
             enable_llm_rewrite=runtime.enable_llm_query_rewrite,
+            evidence_chain_mode=request.evidence_chain_mode,
         )
 
         # Convert chat history to list of dicts for the runner
@@ -190,6 +201,7 @@ def ask_question(
             # Propagation Safety Mode
             propagation_safety_mode=response_data.get("propagation_safety_mode", False),
             propagation_safety_audit=response_data.get("propagation_safety_audit"),
+            evidence_chain=response_data.get("evidence_chain"),
             # LLM Query Rewriting
             original_question=response_data.get("original_question"),
             llm_rewrite=response_data.get("llm_rewrite"),

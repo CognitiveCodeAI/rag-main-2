@@ -6,6 +6,7 @@ ensuring no raw context leakage.
 
 import json
 import logging
+import re
 import time
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -36,7 +37,7 @@ Return ONLY valid JSON.
 JSON SCHEMA:
 {{
   "answer": "your synthesized answer with preserved citations",
-  "citations": [{{"node_id": "...", "page_no": 1, "label": "..."}}],
+  "citations": [{{"citation_id": "C1", "node_id": "...", "page_no": 1, "label": "...", "exact_quote": "verbatim quote from a verified sub-answer"}}],
   "conflicts_summary": "brief summary of any conflicts, or empty string"
 }}
 
@@ -68,8 +69,10 @@ def _format_sub_answers(sub_questions: List[SubQuestion], sub_answers: List[SubA
         
         citations_str = ""
         if sa.citations:
-            cites = [f"p.{c.get('page_no', '?')}" for c in sa.citations]
-            citations_str = f" (Citations: {', '.join(cites)})"
+            citations_str = (
+                "\nGrounded citations: "
+                + json.dumps(sa.citations, ensure_ascii=False)
+            )
         
         parts.append(
             f"Sub-question: {sq_text}\n"
@@ -128,6 +131,51 @@ def _aggregate_conflicts(sub_answers: List[SubAnswer]) -> str:
                         conflict_notes.append(notes)
     
     return "; ".join(conflict_notes) if conflict_notes else ""
+
+
+def _prepare_grounded_citations(
+    answer: str,
+    citations: List[Dict[str, Any]],
+    sub_answers: List[SubAnswer],
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Attach stable IDs and verbatim quotes from verified sub-answers."""
+    authoritative = {
+        (cite.get("node_id"), cite.get("page_no")): cite
+        for cite in _merge_citations(sub_answers)
+        if cite.get("node_id") and cite.get("page_no") and cite.get("exact_quote")
+    }
+    candidates = citations or list(authoritative.values())
+    grounded: List[Dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+
+    for cite in candidates:
+        key = (cite.get("node_id"), cite.get("page_no"))
+        source = authoritative.get(key)
+        if source is None or key in seen:
+            continue
+        seen.add(key)
+        citation_id = f"C{len(grounded) + 1}"
+        grounded_cite = {
+            "citation_id": citation_id,
+            "node_id": source["node_id"],
+            "page_no": source["page_no"],
+            "label": source.get("label"),
+            "exact_quote": source["exact_quote"],
+        }
+        grounded.append(grounded_cite)
+
+        legacy_refs = [source["node_id"]]
+        if source.get("label"):
+            legacy_refs.append(source["label"])
+        for ref in legacy_refs:
+            answer = re.sub(
+                rf"\[{re.escape(str(ref))}:\s*{source['page_no']}\]",
+                f"[{citation_id}]",
+                answer,
+                flags=re.IGNORECASE,
+            )
+
+    return answer, grounded
 
 
 class Synthesizer:
@@ -216,8 +264,11 @@ class Synthesizer:
                 logger.warning(f"[Synthesizer] Failed to parse JSON, using raw text")
                 # Fallback: use raw text as answer with merged citations
                 return (
-                    response_text,
-                    _merge_citations(sub_answers),
+                    *_prepare_grounded_citations(
+                        response_text,
+                        _merge_citations(sub_answers),
+                        sub_answers,
+                    ),
                     _aggregate_conflicts(sub_answers),
                     latency_ms
                 )
@@ -230,6 +281,11 @@ class Synthesizer:
             # If synthesizer didn't provide citations, merge from sub-answers
             if not citations:
                 citations = _merge_citations(sub_answers)
+            final_answer, citations = _prepare_grounded_citations(
+                final_answer,
+                citations,
+                sub_answers,
+            )
             
             # If synthesizer didn't note conflicts, aggregate from sub-answers
             if not conflicts_summary:
@@ -249,9 +305,14 @@ class Synthesizer:
             
             fallback_answer = " ".join(parts) if parts else "Unable to synthesize answer due to error."
             
-            return (
+            fallback_answer, fallback_citations = _prepare_grounded_citations(
                 fallback_answer,
                 _merge_citations(sub_answers),
+                sub_answers,
+            )
+            return (
+                fallback_answer,
+                fallback_citations,
                 _aggregate_conflicts(sub_answers),
                 latency_ms
             )

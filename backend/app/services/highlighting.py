@@ -164,6 +164,11 @@ def build_selector_artifacts_for_nodes(
                 "page_no": node.page_no,
                 "node_type": node.node_type.value if hasattr(node.node_type, "value") else str(node.node_type),
                 "label": node.label,
+                "page_size": (node.meta or {}).get("page_size"),
+                "page_rotation": (node.meta or {}).get("page_rotation", 0),
+                "coordinate_system": (node.meta or {}).get("coordinate_system"),
+                "source_span_resolution": (node.meta or {}).get("source_span_resolution"),
+                "source_spans": (node.meta or {}).get("source_spans") or [],
             }
         )
         selector_bundles.append(bundle)
@@ -207,7 +212,14 @@ def build_selector_artifacts_for_nodes(
         "schema_version": "1.0",
         "doc_id": doc.doc_id,
         "version": doc.version,
+        "content_hash": (
+            doc.content_hash
+            if (doc.content_hash or "").startswith("sha256:")
+            else f"sha256:{doc.content_hash}"
+        ),
         "normalization": NORMALIZATION_ID,
+        "evidence_schema_version": "2.0",
+        "coordinate_system": "normalized_top_left",
         "generated_at": now_iso,
         "canonical_text": canonical_text,
         "nodes": source_entries,
@@ -386,10 +398,26 @@ def build_source_manifest(
     selectors_available = storage.selectors_exist(doc.doc_id, version)
 
     selector_total = 0
+    evidence_v2_eligible = 0
+    evidence_v2_total = 0
+    evidence_v2_exact = 0
     if source_map_available:
         try:
             source_map = storage.get_source_map(doc.doc_id, version)
-            selector_total = len(source_map.get("nodes", []))
+            source_nodes = source_map.get("nodes", [])
+            selector_total = len(source_nodes)
+            eligible_nodes = [
+                node for node in source_nodes if node.get("node_type") == "chunk"
+            ]
+            evidence_v2_eligible = len(eligible_nodes)
+            evidence_v2_total = sum(
+                1 for node in eligible_nodes if node.get("source_spans")
+            )
+            evidence_v2_exact = sum(
+                1
+                for node in eligible_nodes
+                if node.get("source_span_resolution") == "exact_source_words"
+            )
         except Exception:
             selector_total = 0
 
@@ -404,7 +432,127 @@ def build_source_manifest(
         "selector_coverage": {
             "nodes_with_selectors": selector_total,
         },
+        "evidence_v2_coverage": {
+            "eligible_text_nodes": evidence_v2_eligible,
+            "nodes_with_source_spans": evidence_v2_total,
+            "nodes_with_exact_source_spans": evidence_v2_exact,
+        },
+        "evidence_v2_reingest_recommended": (
+            evidence_v2_eligible > 0 and evidence_v2_exact < evidence_v2_eligible
+        ),
         "backfill_needed": not (canonical_available and source_map_available and selectors_available),
+    }
+
+
+def backfill_pdf_source_provenance(
+    db: Session,
+    doc: DocumentGraph,
+    raw_pdf: bytes,
+    *,
+    storage: Optional[StorageClient] = None,
+) -> dict:
+    """Upgrade legacy native-PDF nodes with V2 word provenance.
+
+    This does not change node IDs, document identity, embeddings, or graph
+    edges. It rereads the immutable original PDF, resolves each existing chunk
+    to one unique source-word sequence, then atomically replaces the highlight
+    artifacts for the existing document version.
+    """
+    from app.graph.chunker import PageBoundedChunker
+    from app.graph.ids import compute_content_hash
+    from app.graph.page_extractor import PageExtractor
+
+    actual_hash = compute_content_hash(raw_pdf)
+    if not _hash_matches(doc.content_hash, actual_hash):
+        raise ValueError("raw PDF content hash does not match the graph document")
+
+    extraction = PageExtractor(skip_ocr=True).extract_pages(
+        raw_pdf,
+        doc_id=doc.doc_id,
+    )
+    pages = {page.page_no: page for page in extraction.pages}
+    nodes = (
+        db.query(Node)
+        .filter(Node.doc_id == doc.doc_id, Node.version == doc.version)
+        .all()
+    )
+
+    exact_count = 0
+    approximate_count = 0
+    unavailable_count = 0
+    for node in nodes:
+        if node.page_no is None or not node.text_plain:
+            unavailable_count += 1
+            continue
+        page_data = pages.get(node.page_no)
+        if page_data is None:
+            unavailable_count += 1
+            continue
+
+        source_spans, status = PageBoundedChunker._compute_chunk_source_spans(
+            node.text_plain,
+            page_data,
+        )
+        meta = dict(node.meta or {})
+        meta.update(
+            {
+                "source_spans": source_spans,
+                "source_span_resolution": status,
+                "evidence_schema_version": "2.0",
+                "coordinate_system": "normalized_top_left",
+                "page_size": {
+                    "width": page_data.width,
+                    "height": page_data.height,
+                },
+                "page_rotation": int(page_data.rotation or 0),
+            }
+        )
+        node.meta = meta
+
+        point_boxes = [
+            span.get("bbox")
+            for span in source_spans
+            if isinstance(span.get("bbox"), dict)
+        ]
+        if point_boxes:
+            node.bbox = {
+                "x0": min(box["x0"] for box in point_boxes),
+                "y0": min(box["y0"] for box in point_boxes),
+                "x1": max(box["x1"] for box in point_boxes),
+                "y1": max(box["y1"] for box in point_boxes),
+            }
+
+        if status == "exact_source_words":
+            exact_count += 1
+        elif source_spans:
+            approximate_count += 1
+        else:
+            unavailable_count += 1
+
+    artifacts = build_selector_artifacts_for_nodes(
+        doc=doc,
+        nodes=nodes,
+        source_type="pdf",
+        mime_type="application/pdf",
+    )
+    hydrate_nodes_with_selectors(nodes, artifacts["selectors"])
+    persist_highlight_artifacts(
+        storage=storage or get_storage_client(),
+        doc_id=doc.doc_id,
+        version=doc.version,
+        canonical_html=artifacts["canonical_html"],
+        source_map=artifacts["source_map"],
+        selectors=artifacts["selectors"],
+    )
+    db.flush()
+
+    return {
+        "doc_id": doc.doc_id,
+        "version": doc.version,
+        "total_nodes": len(nodes),
+        "exact_nodes": exact_count,
+        "approximate_nodes": approximate_count,
+        "unavailable_nodes": unavailable_count,
     }
 
 
@@ -522,6 +670,102 @@ def _match_with_tight_fuzzy(page_text: str, quote_text: str, threshold: float) -
     return best
 
 
+def _resolve_quote_to_source_rects(
+    quote_text: str,
+    source_spans: list[dict],
+) -> Tuple[Optional[list[dict]], str]:
+    """Resolve one exact quote to normalized word rectangles.
+
+    The quote must occur exactly once inside the cited node's ordered source
+    words. Returned rectangles are merged per source line while retaining
+    disjoint lines/columns.
+    """
+    ordered = sorted(source_spans, key=lambda item: int(item.get("order", 0) or 0))
+    parts: list[str] = []
+    ranges: list[Tuple[int, int, dict]] = []
+    cursor = 0
+    for span in ordered:
+        word = normalize_text(str(span.get("text") or "")).casefold()
+        if not word:
+            continue
+        if parts:
+            parts.append(" ")
+            cursor += 1
+        start = cursor
+        parts.append(word)
+        cursor += len(word)
+        ranges.append((start, cursor, span))
+
+    stream = "".join(parts)
+    needle = normalize_text(quote_text).casefold()
+    if not stream or not needle:
+        return None, "empty_source_words_or_quote"
+
+    occurrences: list[int] = []
+    search_from = 0
+    while True:
+        idx = stream.find(needle, search_from)
+        if idx < 0:
+            break
+        occurrences.append(idx)
+        search_from = idx + max(1, len(needle))
+        if len(occurrences) > 1:
+            return None, "ambiguous_exact_quote_in_cited_node"
+    if not occurrences:
+        return None, "exact_quote_not_in_cited_source_words"
+
+    match_start = occurrences[0]
+    match_end = match_start + len(needle)
+    matched_words = [
+        span
+        for start, end, span in ranges
+        if start < match_end and end > match_start
+    ]
+    if not matched_words:
+        return None, "exact_quote_has_no_source_rectangles"
+
+    for span in matched_words:
+        if (
+            span.get("verifiable") is not True
+            or span.get("coordinate_system") != "pdf_points_top_left"
+            or not isinstance(span.get("normalized_bbox"), dict)
+        ):
+            return None, "source_coordinates_not_verifiable"
+
+    # Merge adjacent words on the same source line. Grouping by the extractor's
+    # block/line identifiers prevents a highlight from spanning columns.
+    line_groups: list[list[dict]] = []
+    current: list[dict] = []
+    current_key: Optional[tuple] = None
+    for span in matched_words:
+        key = (span.get("block_no"), span.get("line_no"))
+        if current and key != current_key:
+            line_groups.append(current)
+            current = []
+        current.append(span)
+        current_key = key
+    if current:
+        line_groups.append(current)
+
+    rects: list[dict] = []
+    for group in line_groups:
+        boxes = [span["normalized_bbox"] for span in group]
+        rect = {
+            "x0": min(float(box["x0"]) for box in boxes),
+            "y0": min(float(box["y0"]) for box in boxes),
+            "x1": max(float(box["x1"]) for box in boxes),
+            "y1": max(float(box["y1"]) for box in boxes),
+        }
+        if not (
+            0.0 <= rect["x0"] < rect["x1"] <= 1.0
+            and 0.0 <= rect["y0"] < rect["y1"] <= 1.0
+        ):
+            return None, "normalized_rectangle_out_of_bounds"
+        rects.append(rect)
+
+    return rects, "exact_unique_quote_with_source_rectangles"
+
+
 def verify_evidence_span(
     *,
     doc_id: str,
@@ -529,6 +773,9 @@ def verify_evidence_span(
     quote_text: str,
     locator: Optional[dict],
     source_map: dict,
+    node_id: Optional[str] = None,
+    document_version: Optional[int] = None,
+    source_hash: Optional[str] = None,
     allow_fuzzy: bool = False,
     fuzzy_threshold: float = 0.97,
 ) -> dict:
@@ -542,10 +789,44 @@ def verify_evidence_span(
           "reason": str,
         }
     """
+    source_doc_id = source_map.get("doc_id")
+    if source_doc_id and source_doc_id != doc_id:
+        return {
+            "status": "NOT_FOUND",
+            "grade": "unavailable",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": "source_map_document_mismatch",
+        }
+    if (
+        document_version is not None
+        and source_map.get("version") is not None
+        and int(source_map["version"]) != int(document_version)
+    ):
+        return {
+            "status": "NOT_FOUND",
+            "grade": "unavailable",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": "source_map_version_mismatch",
+        }
+    if source_hash and source_map.get("content_hash") and not _hash_matches(
+        source_hash,
+        source_map.get("content_hash"),
+    ):
+        return {
+            "status": "NOT_FOUND",
+            "grade": "unavailable",
+            "matched_locator": None,
+            "confidence": 0.0,
+            "reason": "source_map_content_hash_mismatch",
+        }
+
     canonical_text = source_map.get("canonical_text") or ""
     if not canonical_text:
         return {
             "status": "NOT_FOUND",
+            "grade": "unavailable",
             "matched_locator": None,
             "confidence": 0.0,
             "reason": "missing_canonical_text",
@@ -555,6 +836,7 @@ def verify_evidence_span(
     if not quote:
         return {
             "status": "NOT_FOUND",
+            "grade": "unavailable",
             "matched_locator": None,
             "confidence": 0.0,
             "reason": "empty_quote_text",
@@ -564,6 +846,7 @@ def verify_evidence_span(
     if not page_range:
         return {
             "status": "NOT_FOUND",
+            "grade": "unavailable",
             "matched_locator": None,
             "confidence": 0.0,
             "reason": "page_not_indexed",
@@ -571,9 +854,16 @@ def verify_evidence_span(
     page_start, page_end = page_range
     page_text = canonical_text[page_start:page_end]
 
-    def found(matched_locator: dict, confidence: float, reason: str) -> dict:
+    def found(
+        matched_locator: dict,
+        confidence: float,
+        reason: str,
+        *,
+        grade: str = "approximate",
+    ) -> dict:
         return {
             "status": "FOUND",
+            "grade": grade,
             "matched_locator": matched_locator,
             "confidence": confidence,
             "reason": reason,
@@ -584,6 +874,7 @@ def verify_evidence_span(
     def not_found(reason: str) -> dict:
         return {
             "status": "NOT_FOUND",
+            "grade": "unavailable",
             "matched_locator": None,
             "confidence": 0.0,
             "reason": reason,
@@ -591,7 +882,43 @@ def verify_evidence_span(
             "page_index": page_index,
         }
 
-    # 1) Prefer exact locator validation when text offsets are provided.
+    # 1) V2 legal-grade path: independently resolve the model's verbatim quote
+    # to the cited node's stored source words.
+    if node_id:
+        candidates = [
+            node
+            for node in (source_map.get("nodes") or [])
+            if node.get("node_id") == node_id and node.get("page_no") == page_index
+        ]
+        if len(candidates) > 1:
+            return not_found("ambiguous_cited_node_in_source_map")
+        if len(candidates) == 1 and candidates[0].get("source_spans"):
+            source_node = candidates[0]
+            rects, rect_reason = _resolve_quote_to_source_rects(
+                quote,
+                source_node.get("source_spans") or [],
+            )
+            if rects:
+                locator_payload: dict[str, Any] = {
+                    "type": "rects",
+                    "coordinate_system": "normalized_top_left",
+                    "rects": rects,
+                    "page_rotation": int(source_node.get("page_rotation") or 0),
+                }
+                if source_node.get("page_size"):
+                    locator_payload["page_size"] = source_node["page_size"]
+                return found(
+                    locator_payload,
+                    1.0,
+                    rect_reason,
+                    grade="verified",
+                )
+            # Source-word provenance exists, therefore failure to locate the
+            # exact quote is authoritative. Never downgrade it to a guessed box.
+            return not_found(rect_reason)
+
+    # 2) Legacy/canonical path. This verifies text in the reconstructed source
+    # but cannot prove a renderable location in the original PDF.
     if locator and locator.get("type") == "text_offsets":
         start = locator.get("start")
         end = locator.get("end")
@@ -611,7 +938,7 @@ def verify_evidence_span(
         else:
             return not_found("locator_outside_cited_page")
 
-    # 2) Exact quote search on cited page.
+    # 3) Exact quote search on cited page.
     quote_idx = page_text.find(quote)
     if quote_idx >= 0:
         start = page_start + quote_idx
@@ -622,7 +949,7 @@ def verify_evidence_span(
             "exact_quote_match_on_page",
         )
 
-    # 3) Whitespace-normalized exact check, still constrained to cited page.
+    # 4) Whitespace-normalized exact check, still constrained to cited page.
     ws_pattern = r"\s+".join(re.escape(part) for part in quote.split())
     if ws_pattern:
         ws_match = re.search(ws_pattern, page_text)
@@ -633,7 +960,7 @@ def verify_evidence_span(
                 "exact_quote_match_on_page_whitespace_normalized",
             )
 
-    # 4) Optional high-threshold fuzzy fallback.
+    # 5) Optional high-threshold fuzzy fallback.
     if allow_fuzzy:
         fuzzy = _match_with_tight_fuzzy(page_text, quote, threshold=fuzzy_threshold)
         if fuzzy:

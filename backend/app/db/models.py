@@ -177,6 +177,7 @@ class CitationSnapshot(Base):
     node_id = Column(String(64), nullable=False)
     selector_bundle = Column(JSONB, nullable=False)
     exact_text = Column(Text, nullable=True)
+    evidence_record = Column(JSONB, nullable=True)
     answer_hash = Column(String(128), nullable=False)
     content_hash = Column(String(128), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

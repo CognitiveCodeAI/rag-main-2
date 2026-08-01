@@ -41,7 +41,7 @@ Return ONLY valid JSON. No markdown, no explanation, no code blocks.
 {{
   "answer": "Your answer based strictly on evidence, or 'Insufficient evidence in provided snippets.'",
   "citations": [
-    {{"node_id": "snippet_id", "page_no": 5, "label": "Table 1 (if applicable)"}}
+    {{"node_id": "snippet_id", "page_no": 5, "label": "Table 1 (if applicable)", "exact_quote": "Smallest complete supporting passage copied verbatim"}}
   ],
   "confidence": 0.85,
   "insufficient_evidence": false,
@@ -60,7 +60,7 @@ The initial franchise fee is $45,000, payable upon signing the Franchise Agreeme
 <output>
 {{
   "answer": "The initial franchise fee is $45,000, payable upon signing the Franchise Agreement.",
-  "citations": [{{"node_id": "fee_1", "page_no": 5, "label": null}}],
+  "citations": [{{"node_id": "fee_1", "page_no": 5, "label": null, "exact_quote": "The initial franchise fee is $45,000, payable upon signing the Franchise Agreement."}}],
   "confidence": 1.0,
   "insufficient_evidence": false,
   "conflict_notes": ""
@@ -80,7 +80,7 @@ The royalty rate is 6% of gross revenue.
 <output>
 {{
   "answer": "The royalty rate is 5% of Gross Sales, paid weekly.",
-  "citations": [{{"node_id": "royalty_1", "page_no": 8, "label": null}}],
+  "citations": [{{"node_id": "royalty_1", "page_no": 8, "label": null, "exact_quote": "Franchisees pay a continuing royalty fee of 5% of Gross Sales, due weekly."}}],
   "confidence": 0.8,
   "insufficient_evidence": false,
   "conflict_notes": "Conflict detected: Page 8 states 5% while page 42 states 6%. Used page 8 (authority_tier 1) as authoritative source."
@@ -101,8 +101,8 @@ Training covers operations, marketing, and customer service.
 {{
   "answer": "Franchisees receive 2 weeks of initial training at the Dallas headquarters, covering operations, marketing, and customer service.",
   "citations": [
-    {{"node_id": "train_1", "page_no": 15, "label": null}},
-    {{"node_id": "train_2", "page_no": 16, "label": null}}
+    {{"node_id": "train_1", "page_no": 15, "label": null, "exact_quote": "Initial training consists of 2 weeks at our Dallas headquarters."}},
+    {{"node_id": "train_2", "page_no": 16, "label": null, "exact_quote": "Training covers operations, marketing, and customer service."}}
   ],
   "confidence": 0.9,
   "insufficient_evidence": false,
@@ -140,7 +140,7 @@ The initial franchise fee is fully earned upon payment and is non-refundable.
 <output>
 {{
   "answer": "No, the franchise fee is non-refundable. It is fully earned upon payment.",
-  "citations": [{{"node_id": "refund_1", "page_no": 6, "label": null}}],
+  "citations": [{{"node_id": "refund_1", "page_no": 6, "label": null, "exact_quote": "The initial franchise fee is fully earned upon payment and is non-refundable."}}],
   "confidence": 1.0,
   "insufficient_evidence": false,
   "conflict_notes": ""
@@ -157,7 +157,7 @@ Prospective franchisees should have sufficient capital to support the business d
 <output>
 {{
   "answer": "The evidence indicates franchisees should have 'sufficient capital' for the startup phase, but does not specify a minimum net worth requirement.",
-  "citations": [{{"node_id": "qual_1", "page_no": 3, "label": null}}],
+  "citations": [{{"node_id": "qual_1", "page_no": 3, "label": null, "exact_quote": "Prospective franchisees should have sufficient capital to support the business during the initial startup phase."}}],
   "confidence": 0.4,
   "insufficient_evidence": false,
   "conflict_notes": ""

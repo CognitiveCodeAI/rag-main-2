@@ -1,11 +1,14 @@
 """Tests for EvidenceSpan parsing and normalization contract."""
 
 from app.qa.evidence_span import (
+    EvidenceRecord,
     EvidenceSpan,
     build_evidence_spans,
     normalize_page_index,
     parse_evidence_span,
 )
+from pydantic import ValidationError
+import pytest
 
 
 def test_parse_evidence_span_text_offsets_schema():
@@ -117,3 +120,69 @@ def test_build_evidence_spans_accepts_and_normalizes_provided_spans():
     assert span["page_index_base"] == 1
     assert span["quote_text"] == "Provided quote"
     assert span["confidence"] == 0.6
+
+
+def test_evidence_record_verified_requires_normalized_rectangles():
+    record = EvidenceRecord.model_validate(
+        {
+            "citation_id": "C1",
+            "doc_id": "doc-1",
+            "document_version": 1,
+            "node_id": "node-1",
+            "page": 2,
+            "exact_quote": "Exact source words.",
+            "source_hash": "sha256:test",
+            "status": "verified",
+            "verification_reason": "exact_unique_quote_with_source_rectangles",
+            "locator": {
+                "type": "rects",
+                "coordinate_system": "normalized_top_left",
+                "rects": [{"x0": 0.1, "y0": 0.2, "x1": 0.4, "y1": 0.23}],
+                "page_rotation": 0,
+            },
+            "confidence": 1.0,
+        }
+    )
+    assert record.locator.type == "rects"
+
+
+def test_evidence_record_rejects_verified_text_offsets():
+    with pytest.raises(ValidationError):
+        EvidenceRecord.model_validate(
+            {
+                "citation_id": "C1",
+                "doc_id": "doc-1",
+                "document_version": 1,
+                "node_id": "node-1",
+                "page": 2,
+                "exact_quote": "Exact source words.",
+                "source_hash": "sha256:test",
+                "status": "verified",
+                "verification_reason": "not_renderable",
+                "locator": {"type": "text_offsets", "start": 0, "end": 5},
+                "confidence": 1.0,
+            }
+        )
+
+
+def test_evidence_record_rejects_out_of_bounds_rectangle():
+    with pytest.raises(ValidationError):
+        EvidenceRecord.model_validate(
+            {
+                "citation_id": "C1",
+                "doc_id": "doc-1",
+                "document_version": 1,
+                "node_id": "node-1",
+                "page": 2,
+                "exact_quote": "Exact source words.",
+                "source_hash": "sha256:test",
+                "status": "verified",
+                "verification_reason": "bad_rectangle",
+                "locator": {
+                    "type": "rects",
+                    "coordinate_system": "normalized_top_left",
+                    "rects": [{"x0": 0.1, "y0": 0.2, "x1": 1.4, "y1": 0.3}],
+                },
+                "confidence": 1.0,
+            }
+        )

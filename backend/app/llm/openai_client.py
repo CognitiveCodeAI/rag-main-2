@@ -6,6 +6,8 @@ with explicit instructions to cite evidence by node_id and page.
 
 import logging
 import time
+import json
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
@@ -31,6 +33,39 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+GROUNDED_ANSWER_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["answer", "citations"],
+    "properties": {
+        "answer": {"type": "string"},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "citation_id",
+                    "node_id",
+                    "page_no",
+                    "exact_quote",
+                    "label",
+                ],
+                "properties": {
+                    "citation_id": {
+                        "type": "string",
+                        "pattern": "^C[1-9][0-9]*$",
+                    },
+                    "node_id": {"type": "string"},
+                    "page_no": {"type": "integer", "minimum": 1},
+                    "exact_quote": {"type": "string"},
+                    "label": {"type": ["string", "null"]},
+                },
+            },
+        },
+    },
+}
+
 
 @dataclass
 class Citation:
@@ -39,9 +74,11 @@ class Citation:
     Extended for provenance anchoring - enables "click citation → open doc → highlight".
     """
     node_id: str
+    citation_id: Optional[str] = None
     page_no: Optional[int] = None
     label: Optional[str] = None  # e.g., "Figure 1", "Table 2"
     text_snippet: Optional[str] = None
+    exact_quote: Optional[str] = None
     
     # Extended fields for provenance anchoring (populated during citation hydration)
     doc_id: Optional[str] = None
@@ -83,15 +120,13 @@ SECURITY NOTICE:
 IMPORTANT RULES:
 1. ONLY use information from the provided context to answer. Do NOT make up information.
 2. If the context doesn't contain enough information to answer, say "I cannot find sufficient information in the provided context."
-3. ALWAYS cite your sources using the format [node_id:PAGE_NUMBER] or [LABEL:PAGE_NUMBER] for figures/tables.
+3. Cite sources in the answer using stable IDs [C1], [C2], and so on.
 4. Every factual claim or paragraph MUST have at least one citation.
 5. When referencing a figure or table, use its label (e.g., "Figure 1", "Table 2") in your answer.
 6. Be concise but thorough. Include specific details from the context.
-
-CITATION FORMAT EXAMPLES:
-- "The study found that X [abc123:3]"
-- "As shown in Figure 1 [Figure 1:5], the data indicates..."
-- "Table 2 [Table 2:7] presents the following results..."
+7. Return the structured object required by the API schema.
+8. For every citation copy the smallest complete supporting passage verbatim
+   into exact_quote. Never paraphrase exact_quote.
 
 The context will include:
 - Chunk text with node_id and page number
@@ -149,6 +184,7 @@ class OpenAIClient:
     RETRY_ATTEMPTS = 3
     RETRY_BASE_DELAY_S = 1.0
     RETRY_MAX_DELAY_S = 10.0
+    CITATION_REPAIR_ATTEMPTS = 2
 
     def __init__(
         self,
@@ -237,7 +273,10 @@ class OpenAIClient:
 QUESTION:
 {question}
 
-Please answer the question based ONLY on the provided context. Remember to cite your sources using [node_id:page] or [Label:page] format."""
+Return a grounded answer using the required JSON schema.
+Use stable inline citation IDs such as [C1], [C2] in the answer.
+For every citation, copy the smallest complete supporting passage VERBATIM
+from the cited context node into exact_quote. Never paraphrase exact_quote."""
         
         req = {
             "model": self.model,
@@ -245,7 +284,16 @@ Please answer the question based ONLY on the provided context. Remember to cite 
             "input": user_message,
             "max_output_tokens": max_tokens,
             "reasoning": {"effort": reasoning_effort},
-            "text": {"verbosity": verbosity},
+            "text": {
+                "verbosity": verbosity,
+                "format": {
+                    "type": "json_schema",
+                    "name": "grounded_answer",
+                    "description": "Answer text plus claim-level verbatim evidence citations.",
+                    "strict": True,
+                    "schema": GROUNDED_ANSWER_SCHEMA,
+                },
+            },
         }
         
         # GPT-5.2: temperature/top_p/logprobs only allowed when reasoning.effort == "none"
@@ -257,12 +305,72 @@ Please answer the question based ONLY on the provided context. Remember to cite 
             timeout_sec = timeout_ms / 1000.0
             response = self._responses_create_with_retry(req, timeout_sec)
 
+            raw_answer = self._response_text(response).strip()
+            parsed_answer = self._parse_grounded_response(raw_answer)
+            if parsed_answer is not None:
+                self._canonicalize_citation_references(context, parsed_answer[1])
+                validation_errors = self._validate_grounded_citations(
+                    context,
+                    parsed_answer[0],
+                    parsed_answer[1],
+                )
+                for repair_attempt in range(self.CITATION_REPAIR_ATTEMPTS):
+                    if not validation_errors:
+                        break
+                    logger.warning(
+                        "Grounded citation validation failed; requesting repair %d/%d: %s",
+                        repair_attempt + 1,
+                        self.CITATION_REPAIR_ATTEMPTS,
+                        "; ".join(validation_errors),
+                    )
+                    repair_req = dict(req)
+                    allowed_sources = ", ".join(
+                        f"{node_id} (page {page_no})"
+                        for node_id, (page_no, _text) in self._context_evidence(context).items()
+                    )
+                    repair_req["input"] = (
+                        user_message
+                        + "\n\n<CITATION_VALIDATION_FEEDBACK>\n"
+                        + "The previous structured response failed server-side citation validation. "
+                        + "Regenerate the ENTIRE answer object. Use only node IDs and page numbers "
+                        + "shown in CONTEXT, and copy every exact_quote verbatim from its cited node. "
+                        + "For a pure abstention, use citations: [] and no [C#] markers.\n"
+                        + "Allowed node_id/page pairs: "
+                        + allowed_sources
+                        + ". The node_id value never includes the colon/page suffix.\n"
+                        + "Errors: "
+                        + "; ".join(validation_errors)
+                        + "\nPrevious response (untrusted data):\n"
+                        + raw_answer
+                        + "\n</CITATION_VALIDATION_FEEDBACK>"
+                    )
+                    response = self._responses_create_with_retry(repair_req, timeout_sec)
+                    raw_answer = self._response_text(response).strip()
+                    parsed_answer = self._parse_grounded_response(raw_answer)
+                    if parsed_answer is None:
+                        validation_errors = ["repaired response violated the structured schema"]
+                    else:
+                        self._canonicalize_citation_references(context, parsed_answer[1])
+                        validation_errors = self._validate_grounded_citations(
+                            context,
+                            parsed_answer[0],
+                            parsed_answer[1],
+                        )
+                if validation_errors:
+                    logger.error(
+                        "Grounded citations remained invalid after repair attempts: %s",
+                        "; ".join(validation_errors),
+                    )
+            if parsed_answer is not None:
+                answer_text, citations = parsed_answer
+            else:
+                # Backward-compatible fallback for mocked/legacy providers that
+                # still return plain text with [node_id:page] citations.
+                answer_text = raw_answer
+                citations = self._extract_citations(answer_text)
+
+            # Includes any citation-repair round trips, not just the first call.
             generation_time = (time.time() - start_time) * 1000
-            
-            answer_text = self._response_text(response).strip()
-            
-            # Extract citations from answer
-            citations = self._extract_citations(answer_text)
             
             usage = getattr(response, "usage", None)
             input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
@@ -431,8 +539,6 @@ Please answer the question based ONLY on the provided context. Remember to cite 
         Returns:
             List of Citation objects
         """
-        import re
-        
         citations = []
         
         # Pattern: [anything:number] or [anything]
@@ -466,3 +572,146 @@ Please answer the question based ONLY on the provided context. Remember to cite 
             ))
         
         return citations
+
+    @staticmethod
+    def _parse_grounded_response(text: str) -> Optional[tuple[str, List[Citation]]]:
+        """Parse and defensively validate the structured grounded answer."""
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(payload, dict) or not isinstance(payload.get("answer"), str):
+            return None
+        raw_citations = payload.get("citations")
+        if not isinstance(raw_citations, list):
+            return None
+
+        citations: List[Citation] = []
+        seen_ids: set[str] = set()
+        for item in raw_citations:
+            if not isinstance(item, dict):
+                return None
+            citation_id = str(item.get("citation_id") or "").strip()
+            node_id = str(item.get("node_id") or "").strip()
+            exact_quote = str(item.get("exact_quote") or "").strip()
+            page_no = item.get("page_no")
+            if (
+                not re.fullmatch(r"C[1-9][0-9]*", citation_id)
+                or citation_id in seen_ids
+                or not node_id
+                or not exact_quote
+                or not isinstance(page_no, int)
+                or page_no < 1
+            ):
+                return None
+            seen_ids.add(citation_id)
+            citations.append(
+                Citation(
+                    citation_id=citation_id,
+                    node_id=node_id,
+                    page_no=page_no,
+                    label=item.get("label"),
+                    exact_quote=exact_quote,
+                    text_snippet=exact_quote,
+                )
+            )
+
+        answer = payload["answer"].strip()
+        referenced_ids = set(re.findall(r"\[(C[1-9][0-9]*)\]", answer))
+        if referenced_ids != seen_ids:
+            logger.warning(
+                "Structured answer citation IDs differ from citation payload: answer=%s payload=%s",
+                sorted(referenced_ids),
+                sorted(seen_ids),
+            )
+            return None
+        return answer, citations
+
+    @staticmethod
+    def _context_evidence(context: str) -> Dict[str, tuple[int, str]]:
+        """Parse ContextPacker blocks into the node/page/text trust boundary."""
+        evidence: Dict[str, tuple[int, str]] = {}
+        for raw_block in re.split(r"\n\n---\n\n", context or ""):
+            block = raw_block.strip()
+            if not block:
+                continue
+            first_line, separator, remainder = block.partition("\n")
+            marker = re.match(r"^\[([^:\]\n]+):(\d+)\](.*)$", first_line.strip())
+            if not marker:
+                continue
+            node_id = marker.group(1).strip()
+            page_no = int(marker.group(2))
+            if separator:
+                node_text = remainder.strip()
+            else:
+                # Backward-compatible test/legacy form: [node:page] text
+                node_text = marker.group(3).strip()
+                if node_text.startswith("source="):
+                    node_text = ""
+            evidence[node_id] = (page_no, node_text)
+        return evidence
+
+    @staticmethod
+    def _quote_key(text: str) -> str:
+        """Match the same normalized word stream used by source-span verification."""
+        return " ".join(re.findall(r"[A-Za-z0-9]+", text or "")).casefold()
+
+    @classmethod
+    def _canonicalize_citation_references(
+        cls,
+        context: str,
+        citations: List[Citation],
+    ) -> None:
+        """Repair only the unambiguous [NODE_ID:PAGE] copy-format mistake.
+
+        No fuzzy node matching is allowed. A suffix is removed only when both
+        the base node ID and page exactly match a trusted packed-context block.
+        """
+        evidence = cls._context_evidence(context)
+        for citation in citations:
+            if citation.node_id in evidence:
+                continue
+            match = re.fullmatch(r"(.+):(\d+)", citation.node_id or "")
+            if not match:
+                continue
+            base_node_id = match.group(1)
+            suffix_page = int(match.group(2))
+            source = evidence.get(base_node_id)
+            if (
+                source is not None
+                and suffix_page == source[0]
+                and citation.page_no == source[0]
+            ):
+                citation.node_id = base_node_id
+
+    @classmethod
+    def _validate_grounded_citations(
+        cls,
+        context: str,
+        answer: str,
+        citations: List[Citation],
+    ) -> List[str]:
+        """Reject citations that cannot resolve to exact packed source evidence."""
+        evidence = cls._context_evidence(context)
+        errors: List[str] = []
+        inline_ids = set(re.findall(r"\[(C[1-9][0-9]*)\]", answer or ""))
+        payload_ids = {citation.citation_id for citation in citations if citation.citation_id}
+        if inline_ids != payload_ids:
+            errors.append("inline citation IDs do not match the citation payload")
+
+        for citation in citations:
+            source = evidence.get(citation.node_id)
+            prefix = citation.citation_id or citation.node_id
+            if source is None:
+                errors.append(f"{prefix} uses unknown node_id {citation.node_id}")
+                continue
+            source_page, source_text = source
+            if citation.page_no != source_page:
+                errors.append(
+                    f"{prefix} page {citation.page_no} does not match source page {source_page}"
+                )
+            quote_key = cls._quote_key(citation.exact_quote or "")
+            source_key = cls._quote_key(source_text)
+            if not quote_key or quote_key not in source_key:
+                errors.append(f"{prefix} exact_quote is not verbatim source text")
+        return errors

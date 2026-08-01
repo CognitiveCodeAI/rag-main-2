@@ -18,6 +18,7 @@ export type JobStatus =
   | "skipped_alias";
 
 export interface Citation {
+  citation_id?: string;
   page_no: number;
   node_id: string;
   doc_id: string;
@@ -41,6 +42,18 @@ export interface Citation {
   normalization?: string;
   evidence_spans?: EvidenceSpan[];
   evidence_verification?: EvidenceVerification[];
+  evidence_status?: EvidenceStatus;
+  verification_status?: EvidenceStatus;
+  evidence_records?: EvidenceRecord[];
+}
+
+export type EvidenceStatus = "verified" | "approximate" | "unavailable";
+
+export interface NormalizedRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
 }
 
 export type EvidenceLocator =
@@ -53,6 +66,13 @@ export type EvidenceLocator =
       type: "bbox";
       bbox: { x0: number; y0: number; x1: number; y1: number };
       page_size?: { width: number; height: number };
+    }
+  | {
+      type: "rects";
+      coordinate_system: "normalized_top_left";
+      rects: NormalizedRect[];
+      page_size?: { width: number; height: number };
+      page_rotation?: 0 | 90 | 180 | 270;
     };
 
 export interface EvidenceSpan {
@@ -67,11 +87,28 @@ export interface EvidenceSpan {
 
 export interface EvidenceVerification {
   status: "FOUND" | "NOT_FOUND";
+  grade?: "verified" | "approximate" | "unavailable";
   matched_locator?: EvidenceLocator | null;
   confidence: number;
   reason: string;
   doc_id?: string;
   page_index?: number;
+}
+
+export interface EvidenceRecord {
+  schema_version: "2.0";
+  citation_id: string;
+  claim_id?: string | null;
+  doc_id: string;
+  document_version: number;
+  node_id: string;
+  page: number;
+  exact_quote: string;
+  source_hash: string;
+  status: EvidenceStatus;
+  verification_reason: string;
+  locator?: EvidenceLocator | null;
+  confidence: number;
 }
 
 export interface SelectorBundle {
@@ -126,6 +163,12 @@ export interface SourceManifestResponse {
   selector_coverage: {
     nodes_with_selectors: number;
   };
+  evidence_v2_coverage?: {
+    eligible_text_nodes: number;
+    nodes_with_source_spans: number;
+    nodes_with_exact_source_spans: number;
+  };
+  evidence_v2_reingest_recommended?: boolean;
   backfill_needed: boolean;
 }
 
@@ -170,6 +213,48 @@ export interface AskResponse {
   clarify_options?: string[] | null;
   propagation_safety_mode: boolean;
   propagation_safety_audit?: Record<string, unknown> | null;
+  evidence_chain?: {
+    enabled: boolean;
+    mode: "off" | "auto" | "on";
+    applied: boolean;
+    time_ms: number;
+    audit?: {
+      scoring_version: string;
+      route: {
+        applied: boolean;
+        mode: "off" | "auto" | "on";
+        score: number;
+        reasons: string[];
+      };
+      applied: boolean;
+      fallback_used: boolean;
+      fallback_reason?: string | null;
+      candidate_count: number;
+      edge_count: number;
+      iterations: number;
+      converged: boolean;
+      selected_nodes: Array<{
+        node_id: string;
+        final_score: number;
+        propagation_score: number;
+        query_relevance: number;
+        seed_relevance: number;
+        is_seed: boolean;
+      }>;
+      paths: Array<{
+        path_id: string;
+        node_ids: string[];
+        relevance_score: number;
+        edges: Array<{
+          from_node_id: string;
+          to_node_id: string;
+          edge_type: string;
+          weight: number;
+        }>;
+      }>;
+      ordered_node_ids: string[];
+    } | null;
+  } | null;
   original_question?: string | null;
   llm_rewrite?: {
     used_llm?: boolean;
@@ -469,6 +554,7 @@ export async function askQuestion(params: {
   top_k?: number;
   chat_history?: Array<{ role: "user" | "assistant"; content: string }>;
   mode?: "standard" | "propagation_safety";
+  evidence_chain_mode?: "off" | "auto" | "on";
 }): Promise<AskResponse> {
   const response = await fetchWithTimeout(`${API_BASE_URL}/v1/qa/ask`, {
     method: "POST",

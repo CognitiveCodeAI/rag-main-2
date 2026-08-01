@@ -15,6 +15,8 @@ import {
   Copy,
   Check,
   RotateCcw,
+  GitBranch,
+  ShieldCheck,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
@@ -39,6 +41,7 @@ import {
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -55,35 +58,10 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { SourceViewer } from "@/components/source-viewer";
-
-const INLINE_CITATION_PATTERN = /\[(seed|adjacent|page):\s*(\d+)\]/gi;
-
-function normalizeInlineRef(value: string): string {
-  return value.toLowerCase().replace(/[\[\]\s]+/g, "");
-}
-
-function findCitationForInlineRef(
-  citations: Citation[] | undefined,
-  refType: string,
-  refValue: string
-): Citation | undefined {
-  if (!citations?.length) return undefined;
-
-  const normalizedRef = `${refType.toLowerCase()}:${refValue}`;
-  const byLabel = citations.find((citation) => {
-    if (!citation.label) return false;
-    const normalizedLabel = normalizeInlineRef(citation.label);
-    return normalizedLabel === normalizedRef || normalizedLabel.endsWith(normalizedRef);
-  });
-  if (byLabel) return byLabel;
-
-  const pageNo = Number.parseInt(refValue, 10);
-  if (!Number.isNaN(pageNo)) {
-    return citations.find((citation) => citation.page_no === pageNo);
-  }
-
-  return undefined;
-}
+import {
+  findCitationForInlineRef,
+  INLINE_CITATION_PATTERN,
+} from "@/components/source-viewer/citation-routing";
 
 // Helper to parse inline citations like [seed:14] and [adjacent:24] and render clickable chips
 function parseInlineCitations(
@@ -109,11 +87,11 @@ function parseInlineCitations(
       );
     }
 
-    const refType = match[1].toLowerCase();
-    const refValue = match[2];
-    const pageNo = Number.parseInt(refValue, 10);
-    const citation = findCitationForInlineRef(citations, refType, refValue);
-    const chipLabel = refType === "page" ? `p.${refValue}` : `${refType}:${refValue}`;
+    const rawRef = match[1].replace(/\s+/g, "");
+    const normalizedRef = rawRef.toLowerCase();
+    const citation = findCitationForInlineRef(citations, rawRef);
+    const pageMatch = normalizedRef.match(/^page:(\d+)$/);
+    const chipLabel = pageMatch ? `p.${pageMatch[1]}` : rawRef;
     
     if (citation && onCitationClick) {
       // Render as inline clickable chip
@@ -122,7 +100,13 @@ function parseInlineCitations(
           key={`cite-${key++}`}
           onClick={() => onCitationClick(citation)}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 rounded border border-primary/20 transition-colors cursor-pointer align-baseline"
-          title={!Number.isNaN(pageNo) ? `View source: Page ${pageNo}` : `View source: ${chipLabel}`}
+          title={
+            citation.page_no && citation.evidence_status === "verified"
+              ? `View verified evidence: Page ${citation.page_no}`
+              : citation.page_no
+                ? `View source: Page ${citation.page_no}`
+              : `View source: ${chipLabel}`
+          }
         >
           <FileText className="h-3 w-3" />
           <span>{chipLabel}</span>
@@ -169,8 +153,9 @@ interface Message extends Omit<RuntimeMessage, "response"> {
 
 // Citation chip component
 function CitationChip({ citation, onClick }: { citation: Citation; onClick?: () => void }) {
-  const label = citation.label || `Page ${citation.page_no || "?"}`;
-  const status = citation.resolve_status || "unresolved";
+  const label = citation.citation_id || citation.label || `Page ${citation.page_no || "?"}`;
+  const status = citation.evidence_status || citation.resolve_status || "unavailable";
+  const exactQuote = citation.evidence_records?.[0]?.exact_quote || citation.text;
   
   return (
     <Tooltip>
@@ -185,8 +170,8 @@ function CitationChip({ citation, onClick }: { citation: Citation; onClick?: () 
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">
         <p className="text-xs">
-          {citation.text?.slice(0, 150)}
-          {citation.text && citation.text.length > 150 ? "..." : ""}
+          {exactQuote?.slice(0, 150)}
+          {exactQuote && exactQuote.length > 150 ? "..." : ""}
         </p>
         <p className="mt-1 text-[11px] text-muted-foreground">
           Status: {status}
@@ -397,9 +382,16 @@ function NodeCard({
 }
 
 // Source panel component
-function SourcePanel({ response }: { response: AskResponse }) {
+function SourcePanel({
+  response,
+  onCitationClick,
+}: {
+  response: AskResponse;
+  onCitationClick?: (citation: Citation) => void;
+}) {
   const [seedsOpen, setSeedsOpen] = React.useState(true);
   const [expandedOpen, setExpandedOpen] = React.useState(false);
+  const [chainsOpen, setChainsOpen] = React.useState(true);
   
   const timing = response.timing || {};
   const totalMs = timing.total_ms || 0;
@@ -409,8 +401,15 @@ function SourcePanel({ response }: { response: AskResponse }) {
     { label: "Embedding", value: timing.embedding_ms || 0, color: "bg-blue-500" },
     { label: "Search", value: timing.search_ms || 0, color: "bg-violet-500" },
     { label: "Expansion", value: timing.expansion_ms || 0, color: "bg-amber-500" },
+    { label: "Evidence chain", value: timing.evidence_chain_ms || 0, color: "bg-cyan-500" },
     { label: "Generation", value: timing.generation_ms || 0, color: "bg-emerald-500" },
   ].filter(p => p.value > 0);
+
+  const chainAudit = response.evidence_chain?.audit;
+  const chainPaths = chainAudit?.paths || [];
+  const citationByNodeId = new Map(
+    (response.citations || []).map((citation) => [citation.node_id, citation])
+  );
   
   return (
     <div className="space-y-6 pr-2">
@@ -435,6 +434,90 @@ function SourcePanel({ response }: { response: AskResponse }) {
           <div className="text-xs text-muted-foreground mt-1">Tokens</div>
         </div>
       </div>
+
+      {/* Explainable evidence topology. This is source structure, not hidden
+          model reasoning and not a statement of factual confidence. */}
+      {response.evidence_chain?.applied && chainAudit && chainPaths.length > 0 && (
+        <Collapsible open={chainsOpen} onOpenChange={setChainsOpen}>
+          <CollapsibleTrigger asChild>
+            <button className="flex items-center justify-between w-full text-left p-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/10 transition-colors">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-md bg-cyan-500/10 flex items-center justify-center">
+                  <GitBranch className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold">Why this answer?</h4>
+                  <p className="text-xs text-muted-foreground">
+                    {chainPaths.length} source-evidence {chainPaths.length === 1 ? "path" : "paths"}
+                  </p>
+                </div>
+              </div>
+              <ChevronRight className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform duration-200",
+                chainsOpen && "rotate-90"
+              )} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-3 space-y-3">
+            <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-muted-foreground">
+              These paths show how source passages are connected and ranked for relevance.
+              They are not a truth or medical/legal confidence score. Open a cited passage to
+              inspect its independently verified source highlight.
+            </div>
+            {chainPaths.map((path) => (
+              <div key={path.path_id} className="rounded-lg border bg-card p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-semibold">Evidence path {path.path_id}</span>
+                  <Badge variant="outline" className="text-[10px] font-mono">
+                    relevance {(path.relevance_score * 100).toFixed(0)}%
+                  </Badge>
+                </div>
+                <div className="space-y-2">
+                  {path.node_ids.map((nodeId, nodeIndex) => {
+                    const citation = citationByNodeId.get(nodeId);
+                    const isVerified = citation?.evidence_status === "verified"
+                      || citation?.verification_status === "verified";
+                    return (
+                      <div key={`${path.path_id}-${nodeId}`} className="flex items-center gap-2">
+                        <div className="flex flex-col items-center self-stretch">
+                          <div className="h-5 w-5 rounded-full border bg-background flex items-center justify-center text-[10px] font-semibold">
+                            {nodeIndex + 1}
+                          </div>
+                          {nodeIndex < path.node_ids.length - 1 && (
+                            <div className="w-px flex-1 min-h-3 bg-border" />
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!citation}
+                          onClick={() => citation && onCitationClick?.(citation)}
+                          className={cn(
+                            "flex-1 min-w-0 rounded-md border px-3 py-2 text-left transition-colors",
+                            citation
+                              ? "hover:border-primary/50 hover:bg-accent"
+                              : "cursor-not-allowed opacity-60"
+                          )}
+                          title={citation ? "Open source evidence" : "Context passage was not cited in the final answer"}
+                        >
+                          <span className="block truncate text-xs font-mono">{nodeId}</span>
+                          <span className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                            {isVerified && <ShieldCheck className="h-3 w-3 text-emerald-600" />}
+                            {isVerified
+                              ? "Verified highlight available"
+                              : citation
+                                ? "Open cited source"
+                                : "Supporting context—not cited"}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* Timing breakdown */}
       <div className="rounded-lg border bg-card p-4">
@@ -972,9 +1055,24 @@ export default function ChatClient() {
             <SheetContent className="w-[400px] sm:w-[540px]">
               <SheetHeader>
                 <SheetTitle>Source Details</SheetTitle>
+                <SheetDescription className="sr-only">
+                  Retrieved passages, evidence-chain paths, and citation verification details.
+                </SheetDescription>
               </SheetHeader>
               <ScrollArea className="h-[calc(100vh-8rem)] mt-4">
-                {selectedResponse && <SourcePanel response={selectedResponse} />}
+                {selectedResponse && (
+                  <SourcePanel
+                    response={selectedResponse}
+                    onCitationClick={(citation) => {
+                      const citationDocId = citation.doc_id || selectedResponse.doc_id || selectedDoc;
+                      if (!citationDocId || citationDocId === "__all__") {
+                        toast.error("Citation does not include a resolvable document ID.");
+                        return;
+                      }
+                      handleCitationClick(citation, citationDocId);
+                    }}
+                  />
+                )}
               </ScrollArea>
             </SheetContent>
           </Sheet>

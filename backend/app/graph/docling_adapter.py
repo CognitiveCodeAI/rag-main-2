@@ -283,7 +283,16 @@ def _get_text_span(item: Any) -> Optional[TextSpan]:
         t = getattr(bbox, "t", None) or getattr(bbox, "y0", None) or 0
         r = getattr(bbox, "r", None) or getattr(bbox, "x1", None) or 0
         b = getattr(bbox, "b", None) or getattr(bbox, "y1", None) or 0
-        return TextSpan(text=text, bbox=(l, t, r, b))
+        # Docling coordinate origins vary by source adapter. Preserve this
+        # provenance for approximate navigation, but do not mark it as
+        # legal-grade renderable evidence until the origin is normalized.
+        return TextSpan(
+            text=text,
+            bbox=(l, t, r, b),
+            coordinate_system="docling_points_unspecified",
+            extraction_source="docling",
+            verifiable=False,
+        )
     except Exception:
         return None
 

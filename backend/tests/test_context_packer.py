@@ -26,7 +26,9 @@ def test_to_text_exposes_canonical_node_id_page_marker() -> None:
     )
 
     text = packed.to_text(include_citations=True)
-    assert text.startswith("[chunk_abc123:3] source=seed\nChunk body")
+    assert text.startswith(
+        "[chunk_abc123:3] node_id=chunk_abc123 page_no=3 source=seed\nChunk body"
+    )
 
 
 def test_to_text_keeps_metadata_outside_citation_brackets() -> None:

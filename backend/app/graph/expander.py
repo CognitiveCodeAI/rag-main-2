@@ -29,6 +29,9 @@ class ExpandedContext:
     
     # For citation tracking
     node_sources: Dict[str, str] = field(default_factory=dict)  # node_id -> source type
+    # Additional authorized nodes selected by query-aware evidence chaining.
+    # Empty for the baseline path, preserving existing behavior.
+    chain_nodes: List[Node] = field(default_factory=list)
     
     @property
     def all_nodes(self) -> List[Node]:
@@ -52,6 +55,11 @@ class ExpandedContext:
                 result.append(node)
         
         for node in self.explained_by_nodes:
+            if node.node_id not in seen:
+                seen.add(node.node_id)
+                result.append(node)
+
+        for node in self.chain_nodes:
             if node.node_id not in seen:
                 seen.add(node.node_id)
                 result.append(node)

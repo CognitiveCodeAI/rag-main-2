@@ -1,0 +1,126 @@
+{
+  "name": "Evidence Chain Answer and Provenance Expectations",
+  "version": "1.0.0",
+  "review_status": "human-authored synthetic fixtures; domain-expert sign-off required before production rollout",
+  "cases": [
+    {
+      "id": "legal_amendment_effective_date",
+      "required_fact_groups": [
+        ["thirty days", "thirty day", "30 days", "30 day"],
+        ["january 1 2026"],
+        ["replaces the termination notice", "replaces the original termination", "replaced the termination notice"],
+        ["sixty day", "sixty days", "60 day", "60 days"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["l1_original", "l1_amendment", "l1_statute"]
+    },
+    {
+      "id": "legal_superseded_policy",
+      "required_fact_groups": [
+        ["five year", "five years", "5 year", "5 years"],
+        ["2025 amendment supersedes", "superseded by the 2025 amendment", "2025 amendment replaced"],
+        ["three year", "three years", "3 year", "3 years"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["l2_prior", "l2_amendment", "l2_current"]
+    },
+    {
+      "id": "legal_simple_fee_lookup",
+      "required_fact_groups": [["250"]],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["l3_fee"]
+    },
+    {
+      "id": "legal_precedent_comparison",
+      "required_fact_groups": [
+        ["smith held that notice was adequate", "smith found the notice adequate", "smith the court held that the notice at issue was adequate"],
+        ["jones distinguished smith", "jones the later court distinguished smith"],
+        ["omitted a statutory warning", "omission of the statutory warning"],
+        ["statutory warning is mandatory", "mandatory statutory warning"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["l4_smith", "l4_jones", "l4_rule"]
+    },
+    {
+      "id": "legal_acl_restricted_amendment",
+      "required_fact_groups": [["one million", "1 million", "1000000"]],
+      "required_limitation_groups": [
+        ["cannot find sufficient information", "insufficient information", "cannot determine", "cannot compare", "does not state", "does not provide", "does not include the text of any amendment", "not provided"]
+      ],
+      "forbidden_phrases": ["increases the liability cap", "increased the liability cap"],
+      "expected_citation_nodes": ["l5_agreement"]
+    },
+    {
+      "id": "clinical_contraindication",
+      "required_fact_groups": [
+        ["severe renal impairment"],
+        ["cleared by the kidneys", "cleared through the kidneys", "kidney clearance"],
+        ["contraindication to drug a", "contraindication for drug a", "drug a is contraindicated"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["c1_condition", "c1_drug", "c1_guideline"]
+    },
+    {
+      "id": "clinical_drug_interaction",
+      "required_fact_groups": [
+        ["drug a inhibits platelet aggregation", "platelet aggregation"],
+        ["drug b is an anticoagulant", "drug b anticoagulant"],
+        ["increases bleeding risk", "increased bleeding risk", "bleeding risk increases"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["c2_drug_a", "c2_drug_b", "c2_interaction"]
+    },
+    {
+      "id": "clinical_simple_dose",
+      "required_fact_groups": [["10 mg daily", "10 milligrams daily"]],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["c3_dose"]
+    },
+    {
+      "id": "clinical_updated_guideline",
+      "required_fact_groups": [
+        ["treatment x as first line", "treatment x was first line"],
+        ["effective in 2026", "2026 update", "2026 guideline"],
+        ["treatment y for high risk", "prefers treatment y", "prefer treatment y"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["c4_prior", "c4_update", "c4_latest"]
+    },
+    {
+      "id": "clinical_abbreviation_bridge",
+      "required_fact_groups": [
+        ["af means atrial fibrillation", "af stands for atrial fibrillation", "af refers to atrial fibrillation"],
+        ["anticoagulation based on risk", "risk based anticoagulation", "anticoagulation depending on risk"],
+        ["reduces embolic stroke risk", "reduce embolic stroke risk"]
+      ],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["c5_af", "c5_anticoag", "c5_stroke"]
+    },
+    {
+      "id": "regression_conjunction_only",
+      "required_fact_groups": [["example clinic"], ["100 main street"]],
+      "required_limitation_groups": [],
+      "forbidden_phrases": [],
+      "expected_citation_nodes": ["r1_cover"]
+    },
+    {
+      "id": "regression_unsupported_why",
+      "required_fact_groups": [],
+      "required_limitation_groups": [
+        ["cannot find sufficient information", "insufficient information", "cannot answer", "not enough information"]
+      ],
+      "forbidden_phrases": [],
+      "citation_policy": "optional",
+      "expected_citation_nodes": ["r2_context"]
+    }
+  ]
+}

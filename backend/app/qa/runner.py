@@ -20,9 +20,10 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
 from app.config import get_settings
 from app.db.graph_models import Node, DocumentGraph
@@ -41,12 +42,18 @@ from app.services.highlighting import (
 from app.storage.minio_client import get_storage_client
 from app.qa import metadata_queries
 from app.qa import structured_targets
-from .evidence_span import build_evidence_spans
+from .evidence_span import EvidenceRecord, build_evidence_spans
 from .normalizer import normalize_query, NormalizedQuery
 from .section_booster import SectionBooster, SectionBoostResult
 from .constraint_parser import parse_constraints, ParsedConstraints
 from .metadata_booster import MetadataBooster, MetadataBoostResult
 from .conflict_detector import detect_conflicts, ConflictDetectionResult
+from .evidence_chain import (
+    EvidenceChainConfig,
+    EvidenceChainEngine,
+    EvidenceChainResult,
+    MultiHopRouter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +181,14 @@ class QAResult:
     # Graph expansion results
     expanded_nodes: List[ExpandedNode] = field(default_factory=list)
     edge_traces: List[EdgeTrace] = field(default_factory=list)
+
+    # Query-aware evidence-chain results. Structural relevance is not factual
+    # confidence and cannot set evidence verification status.
+    evidence_chain_enabled: bool = False
+    evidence_chain_mode: str = "off"
+    evidence_chain_applied: bool = False
+    evidence_chain_audit: Optional[Dict[str, Any]] = None
+    evidence_chain_time_ms: float = 0.0
     
     # Context packing results
     packed_context: str = ""
@@ -258,6 +273,13 @@ class QAResult:
             },
             "expanded_nodes": [vars(n) for n in self.expanded_nodes],
             "edge_traces": [vars(e) for e in self.edge_traces],
+            "evidence_chain": {
+                "enabled": self.evidence_chain_enabled,
+                "mode": self.evidence_chain_mode,
+                "applied": self.evidence_chain_applied,
+                "time_ms": self.evidence_chain_time_ms,
+                "audit": self.evidence_chain_audit,
+            },
             "packed_context": self.packed_context,
             "context_node_ids": self.context_node_ids,
             "total_context_tokens": self.total_context_tokens,
@@ -270,6 +292,7 @@ class QAResult:
                 "search_ms": self.search_time_ms,
                 "boosting_ms": self.boosting_time_ms,
                 "expansion_ms": self.expansion_time_ms,
+                "evidence_chain_ms": self.evidence_chain_time_ms,
                 "packing_ms": self.packing_time_ms,
                 "generation_ms": self.generation_time_ms,
                 "total_ms": self.total_time_ms,
@@ -354,6 +377,8 @@ Return JSON only in the following format:
         propagation_safety_config: Optional[Dict[str, Any]] = None,
         enable_llm_rewrite: Optional[bool] = None,
         entitlements: Optional["Entitlements"] = None,
+        enable_evidence_chains: Optional[bool] = None,
+        evidence_chain_mode: Optional[str] = None,
     ):
         """Initialize QA runner.
 
@@ -370,6 +395,8 @@ Return JSON only in the following format:
             propagation_safety_config: Config dict for propagation_safety mode
             enable_llm_rewrite: Enable LLM query rewriting (uses config if None)
             entitlements: User entitlements for ACL enforcement (None = ACL disabled)
+            enable_evidence_chains: Override the environment feature flag.
+            evidence_chain_mode: off, auto, or on. Ignored when feature is disabled.
         """
         from app.acl.enforcer import ACLEnforcer
 
@@ -391,6 +418,30 @@ Return JSON only in the following format:
         self.rerank_force = rerank_force
         self.rerank_gate_context = rerank_gate_context
         self.propagation_safety_config = propagation_safety_config
+
+        settings = get_settings()
+        self.evidence_chain_enabled = (
+            settings.evidence_chain_enabled
+            if enable_evidence_chains is None
+            else enable_evidence_chains
+        )
+        configured_mode = evidence_chain_mode or settings.evidence_chain_mode
+        if configured_mode not in {"off", "auto", "on"}:
+            raise ValueError("evidence_chain_mode must be off, auto, or on")
+        self.evidence_chain_mode = configured_mode if self.evidence_chain_enabled else "off"
+        chain_config = EvidenceChainConfig(
+            mode=self.evidence_chain_mode,
+            route_threshold=settings.evidence_chain_route_threshold,
+            max_hops=settings.evidence_chain_max_hops,
+            max_nodes=settings.evidence_chain_max_nodes,
+            max_selected_nodes=settings.evidence_chain_max_selected_nodes,
+            max_chains=settings.evidence_chain_max_chains,
+            propagation_steps=settings.evidence_chain_propagation_steps,
+            restart_probability=settings.evidence_chain_restart_probability,
+        )
+        self.evidence_chain_engine = EvidenceChainEngine(
+            db, acl_enforcer=self.acl_enforcer, config=chain_config
+        )
         
         # LLM Query Rewriter (optional, for multi-turn conversations)
         from app.qa.llm_rewriter import LLMQueryRewriter
@@ -400,7 +451,7 @@ Return JSON only in the following format:
         logger.info(
             f"QA Runner initialized (normalization={enable_normalization}, "
             f"boosting={enable_boosting}, rerank={enable_rerank}, rerank_force={rerank_force}, "
-            f"llm_rewrite={self.enable_llm_rewrite})"
+            f"llm_rewrite={self.enable_llm_rewrite}, evidence_chain={self.evidence_chain_mode})"
         )
     
     @classmethod
@@ -468,6 +519,8 @@ Return JSON only in the following format:
         result = QAResult(question=question, doc_id=doc_id)
         request_id = uuid.uuid4().hex
         result.rerank_enabled = self.enable_rerank
+        result.evidence_chain_enabled = self.evidence_chain_enabled
+        result.evidence_chain_mode = self.evidence_chain_mode
         
         # Set prompt version for auditability
         from app.prompts import get_prompt_version
@@ -1058,13 +1111,36 @@ Return JSON only in the following format:
                 f"{len(expanded.explained_by_nodes)} explained_by "
                 f"in {result.expansion_time_ms:.0f}ms"
             )
+
+            # 5b. Query-aware evidence-chain retrieval. This layer is
+            # fail-safe: any error returns to the exact baseline expansion and
+            # packing path. It can rank authorized evidence but cannot verify
+            # a citation or source location.
+            expanded, chain_result, result.evidence_chain_time_ms = (
+                self._apply_evidence_chain(
+                    expanded=expanded,
+                    question=question,
+                    seed_scores={seed.node_id: seed.score for seed in result.seed_nodes},
+                    doc_id=doc_id,
+                    version=version,
+                    log_prefix="[QA]",
+                )
+            )
+
+            result.evidence_chain_applied = chain_result.applied
+            result.evidence_chain_audit = chain_result.to_audit_dict()
             
             # Build expanded nodes and edge traces
             result.expanded_nodes, result.edge_traces = self._build_expansion_audit(expanded)
             
             # Conflict detection (threshold-gated) on expanded nodes
             # Collect all expanded nodes with their metadata
-            expanded_node_dicts = self._collect_expanded_nodes_metadata(expanded)
+            conflict_node_ids = (
+                chain_result.selected_node_ids if chain_result.applied else None
+            )
+            expanded_node_dicts = self._collect_expanded_nodes_metadata(
+                expanded, allowed_node_ids=conflict_node_ids
+            )
             conflict_result: ConflictDetectionResult = detect_conflicts(
                 cited_nodes=expanded_node_dicts,
                 constraints=constraints
@@ -1080,7 +1156,14 @@ Return JSON only in the following format:
             # 6. Context packing
             logger.info("[QA] Packing context")
             start = time.time()
-            packed: PackedContext = self.packer.pack(expanded, query=question)
+            packed: PackedContext = self.packer.pack(
+                expanded,
+                query=question,
+                node_order=(chain_result.ordered_node_ids if chain_result.applied else None),
+                allowed_node_ids=(
+                    chain_result.selected_node_ids if chain_result.applied else None
+                ),
+            )
             result.packing_time_ms = (time.time() - start) * 1000
             
             result.packed_context = packed.to_text(include_citations=True)
@@ -1107,7 +1190,7 @@ Return JSON only in the following format:
             result.citations = self._hydrate_citations(
                 citations=answer_result.citations,
                 doc_id=doc_id,
-                version=1,  # Default version, could be passed from document lookup
+                version=version or 1,
                 context_node_ids=result.context_node_ids,
                 answer_text=answer_result.answer,
                 request_id=request_id,
@@ -1159,7 +1242,65 @@ Return JSON only in the following format:
         expanded.explained_by_nodes = self.acl_enforcer.filter_nodes(
             expanded.explained_by_nodes, stage="expansion_explained_by"
         )
+        expanded.chain_nodes = self.acl_enforcer.filter_nodes(
+            expanded.chain_nodes, stage="evidence_chain_selected"
+        )
         return expanded
+
+    def _apply_evidence_chain(
+        self,
+        expanded: ExpandedContext,
+        question: str,
+        seed_scores: Dict[str, float],
+        doc_id: Optional[str],
+        version: Optional[int],
+        log_prefix: str = "[QA]",
+    ) -> tuple[ExpandedContext, EvidenceChainResult, float]:
+        """Apply the optional chain layer with a fail-safe baseline fallback.
+
+        The returned ``expanded`` object contains only ACL-filtered additional
+        nodes. Exceptions are reduced to a non-sensitive type-only reason and
+        never abort the answer pipeline.
+        """
+        route = MultiHopRouter.decide(
+            question,
+            mode=self.evidence_chain_mode,
+            threshold=self.evidence_chain_engine.config.route_threshold,
+        )
+        chain_result = EvidenceChainResult.skipped(route)
+        if not self.evidence_chain_enabled:
+            return expanded, chain_result, 0.0
+
+        started = time.time()
+        try:
+            chain_result = self.evidence_chain_engine.build(
+                expanded=expanded,
+                question=question,
+                seed_scores=seed_scores,
+                doc_id=doc_id,
+                version=version,
+            )
+            if chain_result.applied:
+                expanded.chain_nodes = chain_result.additional_nodes
+                for node in expanded.chain_nodes:
+                    expanded.node_sources[node.node_id] = "chain"
+                # Defense in depth: every engine hop is filtered, then the
+                # shared choke point filters the final node set again.
+                expanded = self._acl_filter_expanded(expanded)
+                chain_result.restrict_to_authorized(
+                    {node.node_id for node in expanded.all_nodes}
+                )
+        except Exception as chain_error:
+            logger.warning(
+                "%s Evidence-chain layer failed; using baseline context",
+                log_prefix,
+                exc_info=True,
+            )
+            chain_result = EvidenceChainResult.fallback(
+                route,
+                f"engine_error:{type(chain_error).__name__}",
+            )
+        return expanded, chain_result, (time.time() - started) * 1000
 
     def _hydrate_citations(
         self,
@@ -1179,7 +1320,8 @@ Return JSON only in the following format:
             citations: List of Citation objects from LLM
             doc_id: Document ID for raw_url generation (None if searching all docs)
             version: Document version
-            context_node_ids: Node IDs from the context (for fallback lookup by page)
+            context_node_ids: Node IDs from the packed context used to reject
+                citations that do not identify retrieved evidence
             answer_text: Final answer text (used to create immutable citation snapshots)
             request_id: Request correlation ID for snapshot records
             
@@ -1193,16 +1335,6 @@ Return JSON only in the following format:
         node_ids = [c.node_id for c in citations]
         nodes = self.db.query(Node).filter(Node.node_id.in_(node_ids)).all()
         node_map = {n.node_id: n for n in nodes}
-        
-        # Also fetch context nodes for fallback page-based lookup
-        # This handles cases where LLM outputs [seed:14] instead of actual node_id
-        context_nodes = []
-        page_to_node: Dict[int, 'Node'] = {}
-        if context_node_ids:
-            context_nodes = self.db.query(Node).filter(Node.node_id.in_(context_node_ids)).all()
-            for n in context_nodes:
-                if n.page_no and n.page_no not in page_to_node:
-                    page_to_node[n.page_no] = n
         
         highlighting_enabled = get_settings().enable_cross_format_highlighting
         storage = get_storage_client() if highlighting_enabled else None
@@ -1248,21 +1380,12 @@ Return JSON only in the following format:
             return "txt"
 
         hydrated_citations = []
-        for c in citations:
+        for citation_index, c in enumerate(citations):
             node = node_map.get(c.node_id)
-            
-            # DATA INTEGRITY:
-            # Page-based fallback is heuristic only; node_id remains the authoritative citation identity.
-            # Fallback: if node_id didn't match (e.g., "seed"), look up by page_no
-            if not node and c.page_no and c.page_no in page_to_node:
-                node = page_to_node[c.page_no]
 
             # D1 (audit H-4): a citation is grounded only if its node_id is in the
-            # packed context, or its page maps to a context node. Otherwise the
-            # model cited evidence that was never retrieved — drop it.
-            if enforce_grounding and c.node_id not in context_id_set and (
-                c.page_no is None or c.page_no not in page_to_node
-            ):
+            # packed context. Page number alone is not evidence identity.
+            if enforce_grounding and c.node_id not in context_id_set:
                 dropped_ungrounded += 1
                 logger.warning(
                     "[QA] Dropping ungrounded citation node_id=%r page=%s "
@@ -1377,8 +1500,10 @@ Return JSON only in the following format:
                 "unresolved": 0.0,
             }
             evidence_confidence = confidence_by_status.get(resolve_status, 0.0)
+            citation_id = c.citation_id or f"C{citation_index + 1}"
             
             citation_dict = {
+                "citation_id": citation_id,
                 "node_id": c.node_id,
                 "doc_id": citation_doc_id,
                 "version": citation_version,
@@ -1432,7 +1557,8 @@ Return JSON only in the following format:
                 doc_id=citation_doc_id,
                 page_index=citation_page_no,
                 quote_text=(
-                    citation_dict.get("text")
+                    c.exact_quote
+                    or citation_dict.get("text")
                     or c.text_snippet
                     or citation_dict.get("anchor_snippet")
                 ),
@@ -1468,11 +1594,15 @@ Return JSON only in the following format:
                                 quote_text=str(span.get("quote_text") or ""),
                                 locator=span.get("locator"),
                                 source_map=source_map,
+                                node_id=node.node_id if node and c.exact_quote else None,
+                                document_version=citation_version,
+                                source_hash=graph_doc.content_hash,
                                 allow_fuzzy=False,
                             )
                         except Exception as e:
                             verification = {
                                 "status": "NOT_FOUND",
+                                "grade": "unavailable",
                                 "matched_locator": None,
                                 "confidence": 0.0,
                                 "reason": f"verification_error:{type(e).__name__}",
@@ -1482,6 +1612,7 @@ Return JSON only in the following format:
                     evidence_verification.append(
                         {
                             "status": "NOT_FOUND",
+                            "grade": "unavailable",
                             "matched_locator": None,
                             "confidence": 0.0,
                             "reason": "missing_source_map",
@@ -1494,6 +1625,18 @@ Return JSON only in the following format:
                 (v for v in evidence_verification if v.get("status") == "FOUND"),
                 None,
             )
+            evidence_grade = (
+                str(found_verification.get("grade") or "approximate")
+                if found_verification
+                else "unavailable"
+            )
+            evidence_status = (
+                "verified"
+                if evidence_grade == "verified"
+                else ("approximate" if found_verification else "unavailable")
+            )
+            citation_dict["evidence_status"] = evidence_status
+            citation_dict["verification_status"] = evidence_status
             if highlighting_enabled and not found_verification:
                 citation_dict["resolve_status"] = "unresolved"
                 citation_dict["resolve_reason"] = "Evidence not found on cited page"
@@ -1516,6 +1659,72 @@ Return JSON only in the following format:
                     }
                     citation_dict["selector_bundle"] = updated_bundle
 
+            exact_quote = (
+                c.exact_quote
+                or (
+                    citation_dict["evidence_spans"][0].get("quote_text")
+                    if citation_dict["evidence_spans"]
+                    else ""
+                )
+                or ""
+            )
+            source_hash = ""
+            if graph_doc and graph_doc.content_hash:
+                source_hash = (
+                    graph_doc.content_hash
+                    if graph_doc.content_hash.startswith("sha256:")
+                    else f"sha256:{graph_doc.content_hash}"
+                )
+            matched_locator = (
+                found_verification.get("matched_locator")
+                if found_verification
+                else None
+            )
+            evidence_record_payload = {
+                "schema_version": "2.0",
+                "citation_id": citation_id,
+                "claim_id": None,
+                "doc_id": citation_doc_id,
+                "document_version": citation_version,
+                "node_id": node.node_id if node else c.node_id,
+                "page": citation_page_no,
+                "exact_quote": exact_quote,
+                "source_hash": source_hash,
+                "status": evidence_status,
+                "verification_reason": (
+                    found_verification.get("reason")
+                    if found_verification
+                    else (
+                        evidence_verification[0].get("reason")
+                        if evidence_verification
+                        else "evidence_verification_not_run"
+                    )
+                ),
+                "locator": matched_locator if evidence_status != "unavailable" else None,
+                "confidence": (
+                    float(found_verification.get("confidence") or 0.0)
+                    if found_verification
+                    else 0.0
+                ),
+            }
+            evidence_record: Optional[Dict[str, Any]] = None
+            try:
+                evidence_record = EvidenceRecord.model_validate(
+                    evidence_record_payload
+                ).model_dump()
+            except ValidationError as exc:
+                # Never expose a partial V2 record. Legacy citation fields may
+                # still be returned for navigation, but the viewer must not
+                # mistake an invalid evidence contract for verified evidence.
+                logger.warning(
+                    "[QA] Omitting invalid evidence record node_id=%r: %s",
+                    c.node_id,
+                    exc.errors(include_url=False),
+                )
+            citation_dict["evidence_records"] = (
+                [evidence_record] if evidence_record is not None else []
+            )
+
             snapshot_id: Optional[str] = None
             if highlighting_enabled and graph_doc and selector_bundle:
                 try:
@@ -1530,6 +1739,7 @@ Return JSON only in the following format:
                         node_id=node.node_id if node else c.node_id,
                         selector_bundle=selector_bundle,
                         exact_text=resolve_result.get("exact_text"),
+                        evidence_record=evidence_record,
                         answer_hash=answer_hash,
                         content_hash=graph_doc.content_hash,
                     )
@@ -2208,12 +2418,29 @@ Return JSON only in the following format:
                     edge_type="explained_by"
                 ))
                 break
+
+        # Query-aware nodes already carry their canonical paths in the
+        # evidence-chain audit. Do not invent edge traces here.
+        existing_ids = {item.node_id for item in expanded_nodes}
+        for node in expanded.chain_nodes:
+            if node.node_id in existing_ids:
+                continue
+            expanded_nodes.append(ExpandedNode(
+                node_id=node.node_id,
+                node_type=get_node_type_str(node),
+                page_no=node.page_no,
+                label=node.label,
+                text_preview=(node.text_plain or "")[:self.TEXT_PREVIEW_LEN],
+                expansion_type="chain",
+            ))
+            existing_ids.add(node.node_id)
         
         return expanded_nodes, edge_traces
     
     def _collect_expanded_nodes_metadata(
         self,
-        expanded: ExpandedContext
+        expanded: ExpandedContext,
+        allowed_node_ids: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Collect metadata from all expanded nodes for conflict detection.
         
@@ -2229,8 +2456,11 @@ Return JSON only in the following format:
             list(expanded.seed_nodes) +
             list(expanded.adjacent_nodes) +
             list(expanded.referenced_nodes) +
-            list(expanded.explained_by_nodes)
+            list(expanded.explained_by_nodes) +
+            list(expanded.chain_nodes)
         )
+        if allowed_node_ids is not None:
+            all_nodes = [node for node in all_nodes if node.node_id in allowed_node_ids]
         
         if not all_nodes:
             return []
@@ -2297,6 +2527,8 @@ Return JSON only in the following format:
         result = QAResult(question=question, doc_id=doc_id)
         request_id = uuid.uuid4().hex
         result.propagation_safety_mode = True
+        result.evidence_chain_enabled = self.evidence_chain_enabled
+        result.evidence_chain_mode = self.evidence_chain_mode
         
         # Set prompt version for auditability
         from app.prompts import get_prompt_version
@@ -2356,6 +2588,27 @@ Return JSON only in the following format:
                 logger.info(f"[PropSafety] {sq.id}: retrieved {len(packet.snippets)} snippets")
             
             audit.sub_packets = evidence_packets
+            chain_audits = [
+                {
+                    "subq_id": packet.subq_id,
+                    "evidence_chain": packet.retrieval_audit.get("evidence_chain"),
+                }
+                for packet in evidence_packets
+                if packet.retrieval_audit.get("evidence_chain") is not None
+            ]
+            result.evidence_chain_applied = any(
+                bool(item["evidence_chain"].get("applied"))
+                for item in chain_audits
+            )
+            result.evidence_chain_time_ms = sum(
+                float(packet.retrieval_audit.get("evidence_chain_time_ms", 0.0))
+                for packet in evidence_packets
+            )
+            result.evidence_chain_audit = {
+                "mode": self.evidence_chain_mode,
+                "applied": result.evidence_chain_applied,
+                "sub_questions": chain_audits,
+            }
             
             # ===== PHASE 3: Verify =====
             logger.info("[PropSafety] Verifying sub-answers...")
@@ -2383,16 +2636,23 @@ Return JSON only in the following format:
                     hydrated_input.append(
                         Citation(
                             node_id=str(cite.get("node_id", "")),
+                            citation_id=cite.get("citation_id"),
                             page_no=cite.get("page_no"),
                             label=cite.get("label"),
+                            exact_quote=cite.get("exact_quote"),
                             evidence_spans=list(cite.get("evidence_spans") or []),
                         )
                     )
 
+            # Ground final synthesis citations in the union of the authorized
+            # snippets that actually reached the propagation verifier. This is
+            # the propagation-mode equivalent of standard context grounding.
+            result.context_node_ids = self._collect_packet_node_ids(evidence_packets)
             result.citations = self._hydrate_citations(
                 citations=hydrated_input,
                 doc_id=doc_id,
                 version=version or 1,
+                context_node_ids=result.context_node_ids,
                 answer_text=final_answer,
                 request_id=request_id,
             )
@@ -2442,6 +2702,19 @@ Return JSON only in the following format:
         
         result.total_time_ms = (time.time() - total_start) * 1000
         return result
+
+    @staticmethod
+    def _collect_packet_node_ids(evidence_packets: List[Any]) -> List[str]:
+        """Return stable, deduplicated node IDs from verified retrieval packets."""
+        ordered: List[str] = []
+        seen: set[str] = set()
+        for packet in evidence_packets:
+            for snippet in getattr(packet, "snippets", ()):
+                node_id = str(getattr(snippet, "node_id", "") or "")
+                if node_id and node_id not in seen:
+                    seen.add(node_id)
+                    ordered.append(node_id)
+        return ordered
     
     def _retrieve_for_subquestion(
         self,
@@ -2556,18 +2829,46 @@ Return JSON only in the following format:
             # through the shared choke point before they reach packing/snippets.
             expanded = self._acl_filter_expanded(expanded)
 
+            expanded, sub_chain_result, sub_chain_time_ms = self._apply_evidence_chain(
+                expanded=expanded,
+                question=sub_question.text,
+                seed_scores={
+                    item["node_id"]: item.get("score", 0.0)
+                    for item in top_seeds
+                },
+                doc_id=doc_id,
+                version=version,
+                log_prefix=f"[PropSafety:{sub_question.id}]",
+            )
+
             # 10. Conflict detection
-            expanded_nodes_meta = self._collect_expanded_nodes_metadata(expanded)
+            expanded_nodes_meta = self._collect_expanded_nodes_metadata(
+                expanded,
+                allowed_node_ids=(
+                    sub_chain_result.selected_node_ids
+                    if sub_chain_result.applied
+                    else None
+                ),
+            )
             conflict_result = detect_conflicts(expanded_nodes_meta, constraints)
             packet.conflicts = conflict_result.conflicts
             
             # 11. Build snippets from expanded context
-            all_expanded_nodes = (
-                list(expanded.seed_nodes) +
-                list(expanded.adjacent_nodes)[:2] +  # Limit adjacent
-                list(expanded.referenced_nodes)[:2] +
-                list(expanded.explained_by_nodes)[:1]
-            )
+            if sub_chain_result.applied:
+                nodes_by_id = {node.node_id: node for node in expanded.all_nodes}
+                all_expanded_nodes = [
+                    nodes_by_id[node_id]
+                    for node_id in sub_chain_result.ordered_node_ids
+                    if node_id in sub_chain_result.selected_node_ids
+                    and node_id in nodes_by_id
+                ]
+            else:
+                all_expanded_nodes = (
+                    list(expanded.seed_nodes) +
+                    list(expanded.adjacent_nodes)[:2] +  # Limit adjacent
+                    list(expanded.referenced_nodes)[:2] +
+                    list(expanded.explained_by_nodes)[:1]
+                )
             
             # Get node texts from DB
             node_ids = [n.node_id for n in all_expanded_nodes]
@@ -2602,7 +2903,9 @@ Return JSON only in the following format:
                 "filter_expr": filter_expr,
                 "detected_intent": normalized.detected_intent,
                 "injected_count": len(injected_seeds),
-                "detected_targets": detected_targets_list
+                "detected_targets": detected_targets_list,
+                "evidence_chain_time_ms": sub_chain_time_ms,
+                "evidence_chain": sub_chain_result.to_audit_dict(),
             }
             
         except Exception as e:
@@ -2642,6 +2945,11 @@ Return JSON only in the following format:
         result.packed_context = standard_result.packed_context
         result.context_node_ids = standard_result.context_node_ids
         result.total_context_tokens = standard_result.total_context_tokens
+        result.evidence_chain_enabled = standard_result.evidence_chain_enabled
+        result.evidence_chain_mode = standard_result.evidence_chain_mode
+        result.evidence_chain_applied = standard_result.evidence_chain_applied
+        result.evidence_chain_audit = standard_result.evidence_chain_audit
+        result.evidence_chain_time_ms = standard_result.evidence_chain_time_ms
         result.conflicts = standard_result.conflicts
         result.has_conflicts = standard_result.has_conflicts
         result.success = standard_result.success

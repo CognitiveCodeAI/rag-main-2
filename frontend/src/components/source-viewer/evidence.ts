@@ -28,6 +28,22 @@ function isValidBbox(locator: EvidenceLocator): locator is Extract<EvidenceLocat
 }
 
 export function getVerifiedEvidenceHighlights(citation?: Citation): VerifiedEvidenceHighlight[] {
+  if (citation?.evidence_records?.length) {
+    return citation.evidence_records
+      .filter(
+        (record) =>
+          record.status === "verified"
+          && record.locator?.type === "rects"
+          && record.locator.rects.length > 0,
+      )
+      .map((record) => ({
+        pageNo: record.page,
+        locator: record.locator!,
+        quoteText: record.exact_quote.trim(),
+        confidence: record.confidence,
+      }));
+  }
+
   if (!citation?.evidence_spans?.length) {
     return [];
   }
@@ -37,7 +53,12 @@ export function getVerifiedEvidenceHighlights(citation?: Citation): VerifiedEvid
   for (let i = 0; i < citation.evidence_spans.length; i += 1) {
     const span = citation.evidence_spans[i];
     const verification = verifications[i];
-    if (!verification || verification.status !== "FOUND" || !verification.matched_locator) {
+    if (
+      !verification
+      || verification.status !== "FOUND"
+      || verification.grade !== "verified"
+      || !verification.matched_locator
+    ) {
       continue;
     }
     const locator = verification.matched_locator;
@@ -71,17 +92,22 @@ export function buildCanonicalHighlightRanges(
   if (!citation || canonicalTextLength <= 0) {
     return [];
   }
-  const highlights = getVerifiedEvidenceHighlights(citation);
-  const ranges = highlights
+  const recordLocators = citation.evidence_records
+    ?.filter((record) => record.status !== "unavailable" && record.locator?.type === "text_offsets")
+    .map((record) => record.locator as Extract<EvidenceLocator, { type: "text_offsets" }>);
+  const legacyLocators = getVerifiedEvidenceHighlights(citation)
     .filter(
       (
         h,
       ): h is VerifiedEvidenceHighlight & { locator: Extract<EvidenceLocator, { type: "text_offsets" }> } =>
         h.locator.type === "text_offsets",
     )
-    .map((h) => {
-      const start = Math.max(0, Math.min(h.locator.start, canonicalTextLength));
-      const end = Math.max(start, Math.min(h.locator.end, canonicalTextLength));
+    .map((h) => h.locator);
+  const locators = recordLocators?.length ? recordLocators : legacyLocators;
+  const ranges = locators
+    .map((locator) => {
+      const start = Math.max(0, Math.min(locator.start, canonicalTextLength));
+      const end = Math.max(start, Math.min(locator.end, canonicalTextLength));
       return { start, end };
     })
     .filter((r) => r.end > r.start)
@@ -110,6 +136,9 @@ export function getEvidenceFailureMessage(citation?: Citation): string | null {
   const highlights = getVerifiedEvidenceHighlights(citation);
   if (highlights.length > 0) {
     return null;
+  }
+  if (citation.evidence_records?.some((record) => record.status === "approximate")) {
+    return "Exact source coordinates unavailable; this citation is approximate";
   }
   return "Evidence not found on cited page";
 }

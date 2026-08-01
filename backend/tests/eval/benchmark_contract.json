@@ -45,6 +45,22 @@
       "allow_question_file_override": false,
       "allow_doc_path_override": false
     },
+    "evidence_chain": {
+      "dataset_path": "backend/tests/eval/questions_evidence_chain.json",
+      "dataset_sha256": "607ec987d8b032858a48fc03c7ca87d1c8db498e46c3a5d8621610e34bc7c7b7",
+      "required_question_count": 12,
+      "allow_question_file_override": false,
+      "allow_doc_path_override": false
+    },
+    "evidence_chain_ab": {
+      "dataset_path": "backend/tests/eval/questions_evidence_chain.json",
+      "dataset_sha256": "607ec987d8b032858a48fc03c7ca87d1c8db498e46c3a5d8621610e34bc7c7b7",
+      "expectations_path": "backend/tests/eval/evidence_chain_ab_expectations.json",
+      "expectations_sha256": "5228ebe3c22f4f262e042ca580bd1b2f62256e0e8e406646f9b2f384eb3b9ee5",
+      "required_question_count": 12,
+      "allow_question_file_override": false,
+      "allow_expectations_override": false
+    },
     "finalboss": {
       "dataset_path": "backend/tests/eval/questions_finalboss.json",
       "dataset_sha256": "501e6c7a378ee008f10afeef8863c0c16b44e0286edd4e1c43105caf3fc2a88c",

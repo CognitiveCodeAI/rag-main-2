@@ -167,3 +167,138 @@ def test_verify_evidence_span_not_found_on_cited_page():
     assert result["status"] == "NOT_FOUND"
     assert result["matched_locator"] is None
     assert result["reason"] == "evidence_not_found_on_cited_page"
+
+
+def _v2_source_map(quote: str = "Initial Franchise Fee is due"):
+    words = quote.split()
+    spans = []
+    x = 0.1
+    for order, word in enumerate(words):
+        width = 0.04 + len(word) * 0.003
+        spans.append(
+            {
+                "span_id": f"p1:w{order}",
+                "order": order,
+                "text": word,
+                "block_no": 0,
+                "line_no": 0 if order < 3 else 1,
+                "word_no": order,
+                "normalized_bbox": {
+                    "x0": x,
+                    "y0": 0.20 if order < 3 else 0.24,
+                    "x1": min(0.98, x + width),
+                    "y1": 0.22 if order < 3 else 0.26,
+                },
+                "coordinate_system": "pdf_points_top_left",
+                "extraction_source": "native_pdf",
+                "verifiable": True,
+            }
+        )
+        x = x + width + 0.01 if order != 2 else 0.1
+    return {
+        "doc_id": "doc-1",
+        "version": 1,
+        "content_hash": "sha256:testhash",
+        "canonical_text": quote,
+        "nodes": [
+            {
+                "node_id": "n1",
+                "start": 0,
+                "end": len(quote),
+                "page_no": 1,
+                "page_rotation": 0,
+                "page_size": {"width": 612, "height": 792},
+                "source_spans": spans,
+            }
+        ],
+    }
+
+
+def test_verify_v2_evidence_returns_precise_normalized_line_rectangles():
+    source_map = _v2_source_map()
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        node_id="n1",
+        page_index=1,
+        quote_text="Initial Franchise Fee is due",
+        locator=None,
+        source_hash="sha256:testhash",
+        source_map=source_map,
+    )
+
+    assert result["status"] == "FOUND"
+    assert result["grade"] == "verified"
+    assert result["matched_locator"]["type"] == "rects"
+    assert result["matched_locator"]["coordinate_system"] == "normalized_top_left"
+    assert len(result["matched_locator"]["rects"]) == 2
+
+
+def test_verify_v2_evidence_fails_closed_on_ambiguous_quote():
+    source_map = _v2_source_map("Fee Fee")
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        node_id="n1",
+        page_index=1,
+        quote_text="Fee",
+        locator=None,
+        source_hash="sha256:testhash",
+        source_map=source_map,
+    )
+
+    assert result["status"] == "NOT_FOUND"
+    assert result["grade"] == "unavailable"
+    assert result["reason"] == "ambiguous_exact_quote_in_cited_node"
+
+
+def test_verify_v2_evidence_rejects_stale_source_map_hash():
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        node_id="n1",
+        page_index=1,
+        quote_text="Initial Franchise Fee is due",
+        locator=None,
+        source_hash="sha256:changed",
+        source_map=_v2_source_map(),
+    )
+
+    assert result["status"] == "NOT_FOUND"
+    assert result["reason"] == "source_map_content_hash_mismatch"
+
+
+def test_verify_v2_evidence_rejects_wrong_document_version():
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        document_version=2,
+        node_id="n1",
+        page_index=1,
+        quote_text="Initial Franchise Fee is due",
+        locator=None,
+        source_hash="sha256:testhash",
+        source_map=_v2_source_map(),
+    )
+
+    assert result["status"] == "NOT_FOUND"
+    assert result["reason"] == "source_map_version_mismatch"
+
+
+def test_verify_v2_evidence_without_renderable_coordinates_is_unavailable():
+    source_map = _v2_source_map()
+    for span in source_map["nodes"][0]["source_spans"]:
+        span["verifiable"] = False
+        span["normalized_bbox"] = None
+        span["extraction_source"] = "ocr_text_only"
+
+    result = verify_evidence_span(
+        doc_id="doc-1",
+        document_version=1,
+        node_id="n1",
+        page_index=1,
+        quote_text="Initial Franchise Fee is due",
+        locator=None,
+        source_hash="sha256:testhash",
+        source_map=source_map,
+    )
+
+    assert result["status"] == "NOT_FOUND"
+    assert result["grade"] == "unavailable"
+    assert result["reason"] == "source_coordinates_not_verifiable"

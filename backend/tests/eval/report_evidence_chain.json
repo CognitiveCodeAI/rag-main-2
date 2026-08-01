@@ -1,0 +1,209 @@
+{
+  "case_count": 12,
+  "cases": [
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "legal_amendment_effective_date",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "legal",
+      "forbidden_leaks": [],
+      "latency_ms": 0.3754580393433571,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "l1_amendment",
+        "l1_original",
+        "l1_statute"
+      ]
+    },
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "legal_superseded_policy",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "legal",
+      "forbidden_leaks": [],
+      "latency_ms": 0.2032919437624514,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "l2_amendment",
+        "l2_current",
+        "l2_prior"
+      ]
+    },
+    {
+      "baseline_recall": 1.0,
+      "case_id": "legal_simple_fee_lookup",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "legal",
+      "forbidden_leaks": [],
+      "latency_ms": 0.0075830030255019665,
+      "route_actual": false,
+      "route_expected": false,
+      "selected_node_ids": [
+        "l3_fee"
+      ]
+    },
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "legal_precedent_comparison",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "legal",
+      "forbidden_leaks": [],
+      "latency_ms": 0.20216696429997683,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "l4_jones",
+        "l4_rule",
+        "l4_smith"
+      ]
+    },
+    {
+      "baseline_recall": 0.5,
+      "case_id": "legal_acl_restricted_amendment",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "legal",
+      "forbidden_leaks": [],
+      "latency_ms": 0.14520803233608603,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "l5_agreement",
+        "l5_public_note"
+      ]
+    },
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "clinical_contraindication",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "clinical",
+      "forbidden_leaks": [],
+      "latency_ms": 0.19879202591255307,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "c1_condition",
+        "c1_drug",
+        "c1_guideline"
+      ]
+    },
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "clinical_drug_interaction",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "clinical",
+      "forbidden_leaks": [],
+      "latency_ms": 0.258374959230423,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "c2_drug_a",
+        "c2_drug_b",
+        "c2_interaction"
+      ]
+    },
+    {
+      "baseline_recall": 1.0,
+      "case_id": "clinical_simple_dose",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "clinical",
+      "forbidden_leaks": [],
+      "latency_ms": 0.00966701190918684,
+      "route_actual": false,
+      "route_expected": false,
+      "selected_node_ids": [
+        "c3_dose"
+      ]
+    },
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "clinical_updated_guideline",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "clinical",
+      "forbidden_leaks": [],
+      "latency_ms": 0.20112498896196485,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "c4_latest",
+        "c4_prior",
+        "c4_update"
+      ]
+    },
+    {
+      "baseline_recall": 0.3333333333333333,
+      "case_id": "clinical_abbreviation_bridge",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "clinical",
+      "forbidden_leaks": [],
+      "latency_ms": 0.24779100203886628,
+      "route_actual": true,
+      "route_expected": true,
+      "selected_node_ids": [
+        "c5_af",
+        "c5_anticoag",
+        "c5_stroke"
+      ]
+    },
+    {
+      "baseline_recall": 1.0,
+      "case_id": "regression_conjunction_only",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "regression",
+      "forbidden_leaks": [],
+      "latency_ms": 0.009040988516062498,
+      "route_actual": false,
+      "route_expected": false,
+      "selected_node_ids": [
+        "r1_cover"
+      ]
+    },
+    {
+      "baseline_recall": 1.0,
+      "case_id": "regression_unsupported_why",
+      "chain_recall": 1.0,
+      "deterministic": true,
+      "domain": "regression",
+      "forbidden_leaks": [],
+      "latency_ms": 0.0025830231606960297,
+      "route_actual": false,
+      "route_expected": false,
+      "selected_node_ids": [
+        "r2_context"
+      ]
+    }
+  ],
+  "contract_id": "rag_eval_contract",
+  "dataset_sha256": "607ec987d8b032858a48fc03c7ca87d1c8db498e46c3a5d8621610e34bc7c7b7",
+  "gates": {
+    "chain_recall_no_regression": true,
+    "chain_recall_target": true,
+    "deterministic": true,
+    "forbidden_leakage_zero": true,
+    "local_p95_under_50ms": true,
+    "route_accuracy": true
+  },
+  "metrics": {
+    "absolute_recall_improvement": 0.4305555555555556,
+    "baseline_evidence_recall": 0.5694444444444444,
+    "chain_evidence_recall": 1.0,
+    "deterministic_rate": 1.0,
+    "forbidden_leaks": 0,
+    "local_p95_ms": 0.258374959230423,
+    "route_accuracy": 1.0
+  },
+  "mode": "evidence_chain",
+  "passed": true
+}

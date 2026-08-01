@@ -1,0 +1,204 @@
+{
+  "name": "Evidence Chain Legal and Clinical Golden Set",
+  "version": "1.0.0",
+  "description": "Deterministic routing, chain-recall, ACL, and regression fixtures. Expected evidence is human-authored and node-level.",
+  "cases": [
+    {
+      "id": "legal_amendment_effective_date",
+      "domain": "legal",
+      "question": "Compare the amendment's effective date with the original termination clause and explain how the governing statute affects it.",
+      "expect_route": true,
+      "nodes": [
+        {"id": "l1_original", "page": 4, "text": "The original agreement permits termination on thirty days notice."},
+        {"id": "l1_amendment", "page": 9, "text": "The amendment is effective January 1, 2026 and replaces the termination notice period."},
+        {"id": "l1_statute", "page": 14, "text": "The governing statute requires a minimum sixty day termination notice period."}
+      ],
+      "edges": [
+        {"from": "l1_original", "to": "l1_amendment", "type": "references", "confidence": 1.0},
+        {"from": "l1_amendment", "to": "l1_statute", "type": "explained_by", "confidence": 0.9}
+      ],
+      "seeds": {"l1_original": 0.92},
+      "expected_evidence": ["l1_original", "l1_amendment", "l1_statute"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "legal_superseded_policy",
+      "domain": "legal",
+      "question": "Which policy is current after the 2025 amendment, and how does it differ from the prior policy?",
+      "expect_route": true,
+      "nodes": [
+        {"id": "l2_prior", "page": 2, "text": "The prior policy authorizes a five year term."},
+        {"id": "l2_amendment", "page": 6, "text": "The 2025 amendment supersedes the prior policy."},
+        {"id": "l2_current", "page": 8, "text": "The current policy authorizes a three year term."}
+      ],
+      "edges": [
+        {"from": "l2_prior", "to": "l2_amendment", "type": "references", "confidence": 0.95},
+        {"from": "l2_amendment", "to": "l2_current", "type": "adjacent_next", "confidence": 1.0}
+      ],
+      "seeds": {"l2_prior": 0.8},
+      "expected_evidence": ["l2_prior", "l2_amendment", "l2_current"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "legal_simple_fee_lookup",
+      "domain": "legal",
+      "question": "What is the filing fee?",
+      "expect_route": false,
+      "nodes": [
+        {"id": "l3_fee", "page": 1, "text": "The filing fee is $250."}
+      ],
+      "edges": [],
+      "seeds": {"l3_fee": 1.0},
+      "expected_evidence": ["l3_fee"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "legal_precedent_comparison",
+      "domain": "legal",
+      "question": "Compare the holdings in Smith and Jones and explain why the later court reached a different result.",
+      "expect_route": true,
+      "nodes": [
+        {"id": "l4_smith", "page": 11, "text": "Smith held that notice was adequate."},
+        {"id": "l4_jones", "page": 22, "text": "Jones distinguished Smith because the notice omitted a statutory warning."},
+        {"id": "l4_rule", "page": 23, "text": "The statutory warning is mandatory in consumer notices."}
+      ],
+      "edges": [
+        {"from": "l4_smith", "to": "l4_jones", "type": "references", "confidence": 1.0},
+        {"from": "l4_jones", "to": "l4_rule", "type": "explained_by", "confidence": 1.0}
+      ],
+      "seeds": {"l4_smith": 0.86},
+      "expected_evidence": ["l4_smith", "l4_jones", "l4_rule"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "legal_acl_restricted_amendment",
+      "domain": "legal",
+      "question": "Compare the agreement with its amendment and explain how the amendment affects liability.",
+      "expect_route": true,
+      "nodes": [
+        {"id": "l5_agreement", "page": 3, "text": "The agreement caps liability at one million dollars."},
+        {"id": "l5_public_note", "page": 4, "text": "The public note explains the original liability cap."},
+        {"id": "l5_restricted", "page": 7, "text": "Restricted amendment increases the liability cap."}
+      ],
+      "edges": [
+        {"from": "l5_agreement", "to": "l5_public_note", "type": "adjacent_next", "confidence": 1.0},
+        {"from": "l5_public_note", "to": "l5_restricted", "type": "references", "confidence": 1.0}
+      ],
+      "seeds": {"l5_agreement": 0.9},
+      "denied_nodes": ["l5_restricted"],
+      "expected_evidence": ["l5_agreement", "l5_public_note"],
+      "forbidden_evidence": ["l5_restricted"]
+    },
+    {
+      "id": "clinical_contraindication",
+      "domain": "clinical",
+      "question": "How does renal impairment affect Drug A treatment under the current guideline, including its contraindication?",
+      "expect_route": true,
+      "nodes": [
+        {"id": "c1_condition", "page": 2, "text": "The patient has severe renal impairment."},
+        {"id": "c1_drug", "page": 5, "text": "Drug A is primarily cleared by the kidneys."},
+        {"id": "c1_guideline", "page": 8, "text": "The current guideline lists severe renal impairment as a contraindication to Drug A."}
+      ],
+      "edges": [
+        {"from": "c1_condition", "to": "c1_drug", "type": "references", "confidence": 0.9},
+        {"from": "c1_drug", "to": "c1_guideline", "type": "explained_by", "confidence": 1.0}
+      ],
+      "seeds": {"c1_condition": 0.95},
+      "expected_evidence": ["c1_condition", "c1_drug", "c1_guideline"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "clinical_drug_interaction",
+      "domain": "clinical",
+      "question": "Compare Drug A and Drug B and explain why their interaction affects bleeding risk.",
+      "expect_route": true,
+      "nodes": [
+        {"id": "c2_drug_a", "page": 10, "text": "Drug A inhibits platelet aggregation."},
+        {"id": "c2_drug_b", "page": 12, "text": "Drug B is an anticoagulant."},
+        {"id": "c2_interaction", "page": 13, "text": "Combined antiplatelet and anticoagulant therapy increases bleeding risk."}
+      ],
+      "edges": [
+        {"from": "c2_drug_a", "to": "c2_drug_b", "type": "adjacent_next", "confidence": 0.8},
+        {"from": "c2_drug_b", "to": "c2_interaction", "type": "references", "confidence": 1.0}
+      ],
+      "seeds": {"c2_drug_a": 0.9},
+      "expected_evidence": ["c2_drug_a", "c2_drug_b", "c2_interaction"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "clinical_simple_dose",
+      "domain": "clinical",
+      "question": "What is the recommended dose of Drug A?",
+      "expect_route": false,
+      "nodes": [
+        {"id": "c3_dose", "page": 4, "text": "The recommended dose of Drug A is 10 mg daily."}
+      ],
+      "edges": [],
+      "seeds": {"c3_dose": 1.0},
+      "expected_evidence": ["c3_dose"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "clinical_updated_guideline",
+      "domain": "clinical",
+      "question": "What changed after the updated guideline, and how does the latest recommendation differ from the prior treatment guidance?",
+      "expect_route": true,
+      "nodes": [
+        {"id": "c4_prior", "page": 1, "text": "Prior guidance recommends Treatment X as first line therapy."},
+        {"id": "c4_update", "page": 2, "text": "The updated guideline was effective in 2026."},
+        {"id": "c4_latest", "page": 3, "text": "The latest recommendation prefers Treatment Y for high risk patients."}
+      ],
+      "edges": [
+        {"from": "c4_prior", "to": "c4_update", "type": "adjacent_next", "confidence": 1.0},
+        {"from": "c4_update", "to": "c4_latest", "type": "adjacent_next", "confidence": 1.0}
+      ],
+      "seeds": {"c4_prior": 0.91},
+      "expected_evidence": ["c4_prior", "c4_update", "c4_latest"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "clinical_abbreviation_bridge",
+      "domain": "clinical",
+      "question": "How does AF relate to anticoagulation, and why does that relationship affect stroke prevention?",
+      "expect_route": true,
+      "nodes": [
+        {"id": "c5_af", "page": 15, "text": "AF means atrial fibrillation in this guideline."},
+        {"id": "c5_anticoag", "page": 16, "text": "Atrial fibrillation may require anticoagulation based on risk."},
+        {"id": "c5_stroke", "page": 17, "text": "Anticoagulation reduces embolic stroke risk in eligible patients."}
+      ],
+      "edges": [
+        {"from": "c5_af", "to": "c5_anticoag", "type": "references", "confidence": 0.9},
+        {"from": "c5_anticoag", "to": "c5_stroke", "type": "explained_by", "confidence": 0.9}
+      ],
+      "seeds": {"c5_af": 0.88},
+      "expected_evidence": ["c5_af", "c5_anticoag", "c5_stroke"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "regression_conjunction_only",
+      "domain": "regression",
+      "question": "List the name and address on the cover page.",
+      "expect_route": false,
+      "nodes": [
+        {"id": "r1_cover", "page": 1, "text": "Example Clinic, 100 Main Street."}
+      ],
+      "edges": [],
+      "seeds": {"r1_cover": 1.0},
+      "expected_evidence": ["r1_cover"],
+      "forbidden_evidence": []
+    },
+    {
+      "id": "regression_unsupported_why",
+      "domain": "regression",
+      "question": "Why?",
+      "expect_route": false,
+      "nodes": [
+        {"id": "r2_context", "page": 1, "text": "Insufficient context."}
+      ],
+      "edges": [],
+      "seeds": {"r2_context": 1.0},
+      "expected_evidence": ["r2_context"],
+      "forbidden_evidence": []
+    }
+  ]
+}
