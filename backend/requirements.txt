@@ -72,7 +72,7 @@ tiktoken==0.8.0
 openai==2.15.0
 
 # JWT/OIDC authentication (C2/C3); [crypto] pulls cryptography for RS/ES verification
-PyJWT[crypto]==2.10.1
+PyJWT[crypto]==2.14.0
 
 # Docling (optional - multi-format document ingestion)
 # Install separately: pip install docling>=2.72.0
